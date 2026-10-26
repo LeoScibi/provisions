@@ -8,9 +8,11 @@
 const DRIVE_FOLDER_NAME = 'Provisions Product Photos';
 const DRIVE_FOLDER_ID_KEY = 'provisions_photosFolderId';
 
+// Requests go through googleFetch (js/sheets.js), so an expired session
+// waits for Reconnect instead of failing mid-upload.
 async function driveHandle(res) {
   if (!res.ok) {
-    let msg = res.statusText;
+    let msg = res.statusText || `HTTP ${res.status}`;
     try { msg = (await res.json()).error?.message || msg; } catch (e) {}
     throw new Error(msg);
   }
@@ -24,18 +26,16 @@ async function driveHandle(res) {
 async function driveEnsureFolder(token) {
   const cached = localStorage.getItem(DRIVE_FOLDER_ID_KEY);
   if (cached) {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${cached}?fields=id,trashed`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const res = await googleFetch(`https://www.googleapis.com/drive/v3/files/${cached}?fields=id,trashed`);
     if (res.ok) {
       const meta = await res.json();
       if (!meta.trashed) return cached;
     }
     // Cached folder is gone or trashed — fall through and create a new one.
   }
-  const created = await driveHandle(await fetch('https://www.googleapis.com/drive/v3/files', {
+  const created = await driveHandle(await googleFetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
   }));
   localStorage.setItem(DRIVE_FOLDER_ID_KEY, created.id);
@@ -48,16 +48,16 @@ async function driveFindFileByName(folderId, name, token) {
   const safeName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const q = `name = '${safeName}' and '${folderId}' in parents and trashed = false`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`;
-  const data = await driveHandle(await fetch(url, { headers: { Authorization: `Bearer ${token}` } }));
+  const data = await driveHandle(await googleFetch(url));
   return (data.files || [])[0] || null;
 }
 
 // Grants anyone-with-the-link read access so the file can be embedded as a
 // plain <img src>. Only needed once per file, right after creation.
 async function driveSetPublicReadable(fileId, token) {
-  await driveHandle(await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+  await driveHandle(await googleFetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role: 'reader', type: 'anyone' })
   }));
 }
@@ -75,9 +75,9 @@ async function driveUploadFileBytes({ folderId, name, mimeType, blob, existingFi
     ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
     : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
 
-  return driveHandle(await fetch(url, {
+  return driveHandle(await googleFetch(url, {
     method: existingFileId ? 'PATCH' : 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
     body
   }));
 }
@@ -96,18 +96,16 @@ const DRIVE_DOCS_FOLDER_ID_KEY = 'provisions_docsFolderId';
 async function driveEnsureDocsFolder(token) {
   const cached = localStorage.getItem(DRIVE_DOCS_FOLDER_ID_KEY);
   if (cached) {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${cached}?fields=id,trashed`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const res = await googleFetch(`https://www.googleapis.com/drive/v3/files/${cached}?fields=id,trashed`);
     if (res.ok) {
       const meta = await res.json();
       if (!meta.trashed) return cached;
     }
     // Cached folder is gone or trashed — fall through and create a new one.
   }
-  const created = await driveHandle(await fetch('https://www.googleapis.com/drive/v3/files', {
+  const created = await driveHandle(await googleFetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: DRIVE_DOCS_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
   }));
   localStorage.setItem(DRIVE_DOCS_FOLDER_ID_KEY, created.id);

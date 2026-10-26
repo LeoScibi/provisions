@@ -21,6 +21,18 @@ models, sheet schemas, or conventions between the two.
   heading on `index.html` (also the logout control — see `initUserBadge()`
   in `js/config.js`, called on every page but a no-op where the badge
   markup isn't present).
+- **App chrome lives in `js/shell.js`**, included on every page: it builds
+  the top bar nav (pages only carry an empty `<header id="topbar">`; add a
+  new page to its `NAV` list), the account menu (Setup and Sign out live
+  there), toasts (`showToast`), and all loading feedback — page loader,
+  top-bar progress bar, and a spinner on the clicked button — driven by the
+  `google-request` events that `googleFetch` fires.
+- **Every Google API call goes through `googleFetch` (`js/sheets.js`)**, never
+  a bare `fetch`. It sends the freshest stored token and, when the session
+  has expired (no token or a 401), waits for the Reconnect banner in
+  `js/shell.js` and then resends the same request — so a save made after
+  the token's hour is up completes once the user reconnects, with the page
+  and any typed input untouched. New Drive/Sheets helpers must use it too.
 - Generic CRUD table framework in `js/crud-page.js` — every flat list page
   (Products, Suppliers, Customers) configures one `initCrudTable()` call
   instead of hand-rolling fetch/append/update/delete logic. Read the

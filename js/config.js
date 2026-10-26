@@ -57,14 +57,14 @@ function clearUserInfo() {
   localStorage.removeItem(PROVISIONS_KEYS.userName);
 }
 
-// Clears everything about the signed-in session — used by the logout
-// control in the top-right user badge (see initUserBadge below).
+// Clears everything about the signed-in session — used by "Sign out" in the
+// top bar's account menu (see js/shell.js).
 function clearSession() {
   clearToken();
   clearUserInfo();
 }
 
-// Non-critical: only powers the "who's signed in" badge, so a failure here
+// Non-critical: only powers the account menu (and the reconnect hint), so a failure here
 // (e.g. a cached token from before the userinfo scopes were added) is
 // silently ignored rather than surfaced as an error.
 async function fetchAndStoreUserInfo(token) {
@@ -79,7 +79,8 @@ async function fetchAndStoreUserInfo(token) {
 }
 
 // Sets up a Google Identity Services token client.
-// onToken(token) fires on every successful sign-in (including silent refresh).
+// onToken(token) fires on every successful sign-in (including a reconnect).
+// onError(message) also fires when the popup is blocked or closed.
 function initGoogleAuth({ clientId, onToken, onError }) {
   return google.accounts.oauth2.initTokenClient({
     client_id: clientId,
@@ -93,6 +94,11 @@ function initGoogleAuth({ clientId, onToken, onError }) {
       if (resp.error) { onError && onError(resp.error); return; }
       storeToken(resp.access_token, resp.expires_in);
       fetchAndStoreUserInfo(resp.access_token).finally(() => { onToken && onToken(resp.access_token); });
+    },
+    error_callback: (err) => {
+      const msg = err?.type === 'popup_failed_to_open' ? 'The sign-in popup was blocked. Allow popups for this site and try again.'
+        : err?.type === 'popup_closed' ? 'Sign-in was cancelled.' : (err?.message || 'Sign-in failed.');
+      onError && onError(msg);
     }
   });
 }
@@ -104,39 +110,11 @@ function tryResumeSession() {
   return getStoredToken();
 }
 
-// Drives the "signed in as X" badge on the Dashboard (index.html only —
-// its markup sits next to the "Dashboard" heading there) — shows/hides it
-// based on session state and wires its logout button once. Runs
-// automatically on every page load (a no-op on pages without the badge);
-// index.html also calls it straight after a successful sign-in so the
-// badge appears without a reload.
-function renderUserBadgeUI() {
-  const badge = document.getElementById('userBadge');
-  if (!badge) return;
-  const token = tryResumeSession();
-  if (!token) { badge.style.display = 'none'; return; }
-  const info = getStoredUserInfo();
-  const nameEl = document.getElementById('userBadgeName');
-  if (nameEl) nameEl.textContent = info.name || info.email || 'Signed in';
-  badge.style.display = 'flex';
-}
-
-function initUserBadge() {
-  renderUserBadgeUI();
-  const logoutBtn = document.getElementById('userBadgeLogout');
-  if (logoutBtn && !logoutBtn.dataset.wired) {
-    logoutBtn.dataset.wired = '1';
-    logoutBtn.addEventListener('click', () => {
-      clearSession();
-      location.reload();
-    });
-  }
-}
-
-window.addEventListener('load', initUserBadge);
-
 // Every page but the Dashboard needs a session, so a signed-out visit (or an
-// expired token) goes straight to the Dashboard's sign-in screen.
+// expired token) goes straight to the Dashboard's sign-in screen, which
+// sends you back here afterwards (see NEXT_PAGE_KEY in index.html).
+const NEXT_PAGE_KEY = 'provisions_nextPage';
 if (!getStoredToken() && !/\/(index\.html)?$/.test(location.pathname)) {
+  try { sessionStorage.setItem(NEXT_PAGE_KEY, location.pathname.split('/').pop() + location.search + location.hash); } catch (e) {}
   location.replace('index.html');
 }
