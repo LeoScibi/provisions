@@ -72,6 +72,15 @@
 //       // it toggles a rowsData-wide predicate filter, stacking with the
 //       // active tab and search term. Always computed from the full
 //       // unfiltered rowsData, never from the current view.
+//     layout: 'cards',            // optional: small cards in a grid instead of
+//                                 // the default one-line rows. A card shows
+//                                 // the photo, tag, name, sub, badges, the
+//                                 // last `prices` entry, gp, and `stock`:
+//     stock: (pick) => ({ n: '12.4', u: 'kg', l: 'in stock', tone: 'ok' }),
+//                                 // optional figure on each card (tone:
+//                                 // ok|warn|crit|muted); return null while it
+//                                 // isn't known yet, and call the returned
+//                                 // handle's rerender() once it is.
 //     kicker: (pick) => 'Cheese · CCS050',        // dialog header, above the title
 //     detailSub: (pick) => 'Fromagerie Dongé · via Fine Cheese Co',
 //     emptyTitle: 'Nothing in the catalogue yet',
@@ -825,6 +834,37 @@ async function initCrudTable(config) {
       </div>`;
   }
 
+  // Card variant of catRowHtml, for `catalogue.layout: 'cards'`.
+  function catCardHtml(d) {
+    const pick = (key) => get(d.values, key);
+    const photoUrl = catalogue.photo ? (pick(catalogue.photo) || '').toString().trim() : '';
+    const name = catalogue.name ? pick(catalogue.name) : '';
+    const tagInfo = catalogue.tag ? catalogue.tag(pick) : null;
+    const subText = catalogue.sub ? catalogue.sub(pick) : '';
+    const badges = catalogue.badges ? catalogue.badges(pick) : [];
+    const price = (catalogue.prices || []).slice(-1)[0];
+    const gpInfo = catalogue.gp ? catalogue.gp(pick) : null;
+    const stock = catalogue.stock ? catalogue.stock(pick) : null;
+
+    return `
+      <button type="button" class="pcard" data-row="${d.rowNumber}">
+        <span class="pc-photo">
+          ${photoUrl ? `<img src="${escapeHtml(photoUrl)}" alt="" loading="lazy">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/></svg>`}
+        </span>
+        <span class="pc-body">
+          <span class="pc-name">${escapeHtml(name)}</span>
+          ${subText ? `<span class="pc-sub">${escapeHtml(subText)}</span>` : ''}
+          <span class="pc-badges">${tagInfo && tagInfo.text ? `<span class="tag ${tagInfo.on ? 't-chill' : 't-amb'}">${escapeHtml(tagInfo.text)}</span>` : ''}${badges.map(b => `<span class="tag t-${b.tone}">${escapeHtml(b.text)}</span>`).join('')}</span>
+        </span>
+        <span class="pc-foot">
+            ${catalogue.stock ? (stock
+              ? `<span class="pc-stock ${stock.tone || ''}"><b>${escapeHtml(stock.n)}${stock.u ? `<em>${escapeHtml(stock.u)}</em>` : ''}</b><small>${escapeHtml(stock.l || '')}</small></span>`
+              : `<span class="pc-stock loading"><b>…</b><small>stock</small></span>`) : ''}
+            ${price ? `<span class="pc-price"><b>${escapeHtml(price.get(pick))}</b><small>${escapeHtml(price.label.toLowerCase())}${gpInfo ? ` · <span style="color:${gpInfo.color}">${escapeHtml(catalogue.gpLabel || 'GP')} ${escapeHtml(gpInfo.text)}</span>` : ''}</small></span>` : ''}
+        </span>
+      </button>`;
+  }
+
   function renderCatalogueGroups(viewRows) {
     if (!viewRows.length) {
       const title = rowsData.length ? 'No rows match the current filters.' : (catalogue.emptyTitle || 'Nothing here yet.');
@@ -840,9 +880,18 @@ async function initCrudTable(config) {
       if (!buckets.has(key)) { buckets.set(key, []); order.push(key); }
       buckets.get(key).push(d);
     });
+    const cards = catalogue.layout === 'cards';
     groupsEl.innerHTML = order.map(key => {
       const items = buckets.get(key);
       const total = catCounts.get(key) || items.length;
+      if (cards) return `
+        <div class="cat-group">
+          <div class="cat-group-head">
+            <span class="g-name">${escapeHtml(key)}</span>
+            <span class="g-count">${items.length} of ${total}</span>
+          </div>
+          <div class="pcards">${items.map(catCardHtml).join('')}</div>
+        </div>`;
       return `
         <div class="cat-group">
           <div class="cat-group-head">
@@ -883,7 +932,7 @@ async function initCrudTable(config) {
       applyViewAndRender();
     });
     groupsEl.addEventListener('click', (e) => {
-      const row = e.target.closest('.cat-row[data-row]');
+      const row = e.target.closest('.cat-row[data-row], .pcard[data-row]');
       if (row) handleEdit(parseInt(row.dataset.row, 10));
     });
     statsEl.addEventListener('click', (e) => {
@@ -1090,5 +1139,11 @@ async function initCrudTable(config) {
   // Catalogue-mode pages own their "+ Add" / bulk-action buttons as page
   // chrome (see products.html) rather than the generic toolbar above, so
   // they need a way to trigger the same dialog/reload this closure owns.
-  return { openAdd: openAddDialog, reload: loadRows };
+  // rerender() redraws the stats and rows from what's already loaded — for
+  // data a page fetches separately, like the Products cards' stock figures.
+  return {
+    openAdd: openAddDialog,
+    reload: loadRows,
+    rerender: () => { if (catalogue) renderCatalogueToolbar(); applyViewAndRender(); }
+  };
 }

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=21">
+<link rel="stylesheet" href="css/style.css?v=23">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -66,7 +66,8 @@
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/drive.js?v=3"></script>
 <script src="js/searchable-select.js?v=1"></script>
-<script src="js/crud-page.js?v=15"></script>
+<script src="js/stock-calc.js?v=1"></script>
+<script src="js/crud-page.js?v=17"></script>
 <script>
   function requireAuth() {
     const cfg = getStoredConfig();
@@ -115,6 +116,44 @@
     if (g.value !== null && g.value < 20) list.push({ text: 'GP low', tone: 'crit' });
     if (g.value === null) list.push({ text: 'GP missing', tone: 'yell' });
     return list;
+  }
+
+  // On-hand stock per product code (js/stock-calc.js), filled in once
+  // Deliveries + Allocations have loaded; null until then.
+  let stockByCode = null;
+
+  async function loadStock() {
+    const cfg = getStoredConfig();
+    const toObjects = ([head = [], ...rows]) => rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+    try {
+      const [deliveries, allocations] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z'),
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z')
+      ]);
+      stockByCode = computeStockByProduct(toObjects(deliveries), toObjects(allocations));
+    } catch (err) {
+      stockByCode = {};
+      showToast(`Couldn't load stock levels: ${err.message}`, 'error');
+    }
+  }
+
+  // ok / low (under the product's Reorder threshold) / out, or null while loading.
+  function stockLevel(pick) {
+    if (!stockByCode) return null;
+    const s = stockByCode[pick('Product code')];
+    const onHand = s ? s.onHand : 0;
+    const threshold = parseFloat(pick('Reorder threshold'));
+    const unit = s ? s.unit : (pick('Pricing basis') === 'Per kg' ? 'kg' : 'pc');
+    const state = onHand <= 0.0001 ? 'out' : (!isNaN(threshold) && onHand < threshold ? 'low' : 'ok');
+    return { onHand, unit, state };
+  }
+
+  function stockFigure(pick) {
+    const lvl = stockLevel(pick);
+    if (!lvl) return null;
+    if (lvl.state === 'out') return { n: 'Out', u: '', l: 'of stock', tone: 'crit' };
+    const n = lvl.unit === 'kg' ? lvl.onHand.toFixed(1).replace(/\.0$/, '') : String(Math.round(lvl.onHand));
+    return { n, u: lvl.unit === 'kg' ? 'kg' : 'pcs', l: lvl.state === 'low' ? 'low stock' : 'in stock', tone: lvl.state === 'low' ? 'warn' : 'ok' };
   }
 
   window.addEventListener('load', () => {
@@ -173,6 +212,8 @@
       ],
       inlineEdit: true,
       catalogue: {
+        layout: 'cards',
+        stock: stockFigure,
         tabsBy: 'Category',
         groupBy: 'Category',
         photo: 'Photo URL',
@@ -194,8 +235,11 @@
           const avgGp = gps.length ? gps.reduce((a, b) => a + b, 0) / gps.length : null;
           const needsAttn = rows.filter(r => rowBadges(pick(r)).length > 0).length;
           const cats = new Set(rows.map(r => pick(r)('Category')).filter(Boolean));
+          const isShort = (pick) => ['low', 'out'].includes(stockLevel(pick)?.state);
+          const short = stockByCode ? rows.filter(r => isShort(pick(r))).length : null;
           return [
             { l: 'Active', n: String(active), u: `of ${rows.length}` },
+            { l: 'Low or out of stock', n: short === null ? '…' : String(short), u: 'products', tone: short ? 'crit' : undefined, key: 'short', filter: isShort },
             { l: 'Average GP', n: avgGp === null ? '—' : `${avgGp.toFixed(1)}%`, u: 'at list' },
             { l: 'Needs attention', n: String(needsAttn), u: 'records', tone: needsAttn > 0 ? 'warn' : undefined, key: 'attention', filter: (pick) => rowBadges(pick).length > 0 },
             { l: 'Categories', n: String(cats.size), u: 'in use' }
@@ -212,9 +256,11 @@
       onLoad: (rows, get) => {
         const cats = new Set(rows.map(r => get(r.values, 'Category')).filter(Boolean));
         document.getElementById('productsSubtitle').textContent =
-          `${rows.length} SKU${rows.length === 1 ? '' : 's'} across ${cats.size} categor${cats.size === 1 ? 'y' : 'ies'}. Click any line to open its record — cost, cut-to-order fields and Xero codes live inside.`;
+          `${rows.length} SKU${rows.length === 1 ? '' : 's'} across ${cats.size} categor${cats.size === 1 ? 'y' : 'ies'}. Click any card to open its record — cost, cut-to-order fields and Xero codes live inside.`;
       }
     });
+
+    loadStock().then(() => products.then(p => p.rerender()));
 
     document.getElementById('addProductBtn').addEventListener('click', () => products.then(p => p.openAdd()));
 

@@ -63,6 +63,11 @@ models, sheet schemas, or conventions between the two.
   one-time, not partial. "Mark as delivered" (in `purchase-orders.html`) is
   the only normal path onto the Deliveries tab: it appends the resulting
   rows there and fills in each line's received qty/lot/best-before.
+- **Stock on hand** is never stored: it's each Deliveries batch's received
+  qty minus its Allocations. `computeStockByProduct()` in `js/stock-calc.js`
+  is the shared version (Products' cards use it); stock.html, index.html,
+  purchase-orders.html and orders.html still carry their own copies of the
+  same maths.
 - **SupplierProducts** — which suppliers sell which products (one row per
   supplier + product, with that supplier's own product code and cost), so a
   product can come from several suppliers. A product's `Default supplier`
