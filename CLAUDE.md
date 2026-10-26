@@ -4,7 +4,9 @@ This is **provisionslondon**, a stock/products/orders tool for Provisions
 UK. It is a separate project from `carisma-catering` — do not mix data
 models, sheet schemas, or conventions between the two.
 
-- **Repo:** `Plato-uk/provisionslondon` on GitHub. Branch `main` only.
+- **Repo:** `LeoScibi/provisions` on GitHub (migrated from
+  `Plato-uk/provisionslondon`, still available as the `plato` remote). Branch
+  `main` only.
 - **Architecture:** static site, no server/build step. Every page talks
   directly to a single Google Sheet via the Sheets API v4, authenticated
   client-side with Google OAuth (`js/config.js`, `js/sheets.js`). OAuth scope
