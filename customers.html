@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=23">
+<link rel="stylesheet" href="css/style.css?v=24">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -17,7 +17,6 @@
 
 <main>
   <h2>Customers</h2>
-  <p class="sub">Who orders go to — keyed by customer name as it appears in Xero. Delivery zone/route/day are placeholders for a later route-suggestion feature.</p>
 
   <div id="signedOutNotice" class="note" style="display:none;">
     Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
@@ -48,7 +47,6 @@
     initCrudTable({
       mount: '#customersMount',
       title: 'Customers',
-      subtitle: 'Who orders go to — price tier, delivery schedule, and payment terms.',
       tab: 'Customers',
       headers: ['Customer name (as in Xero)','Your account ref','Delivery address','Delivery day','Delivery zone','Delivery route','Payment terms (days)','Direct Debit status','Min shelf life on receipt (days)','Price list','Discount (%)','Contact email','Active'],
       autoId: null,

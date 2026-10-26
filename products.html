@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=23">
+<link rel="stylesheet" href="css/style.css?v=24">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -20,7 +20,6 @@
     <div style="max-width:60ch;">
       <span class="kicker">Item master</span>
       <h2>Products</h2>
-      <p class="sub" id="productsSubtitle">One row per SKU, keyed by your own product code. Mirrors the Xero-linked schema: cost/landed cost, cut-to-order fields, and Xero item/account codes for accounting sync.</p>
     </div>
     <div id="productsActions" style="display:none; gap:9px; flex:none; padding-top:8px;">
       <button type="button" class="btn ghost" id="bulkPhotosBtn" title="Select image files named after product codes (e.g. CCS050.jpg) — matched files upload to Drive and are set as that product's photo.">Bulk photos</button>
@@ -39,7 +38,6 @@
   <div class="dlg-h">
     <div>
       <div class="ttl">Bulk upload photos</div>
-      <div class="subtitle">Match image files to product codes and upload them to Drive in one pass.</div>
     </div>
     <button type="button" class="dlg-close" id="photosCloseX" aria-label="Close">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -252,11 +250,6 @@
         },
         emptyTitle: 'Nothing in the catalogue yet',
         emptySub: 'Add your first product, or use Bulk photos once your SKUs are in.'
-      },
-      onLoad: (rows, get) => {
-        const cats = new Set(rows.map(r => get(r.values, 'Category')).filter(Boolean));
-        document.getElementById('productsSubtitle').textContent =
-          `${rows.length} SKU${rows.length === 1 ? '' : 's'} across ${cats.size} categor${cats.size === 1 ? 'y' : 'ies'}. Click any card to open its record — cost, cut-to-order fields and Xero codes live inside.`;
       }
     });
 

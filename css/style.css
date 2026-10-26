@@ -73,6 +73,7 @@ main{padding:32px 32px 64px;max-width:1440px;margin:0 auto}
 
 /* ---- structure: the page title carries the weight now */
 h2{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1.06;margin-bottom:8px}
+main h2{margin-bottom:22px}
 .sub{color:var(--steel);font-size:14.5px;line-height:1.5;margin-bottom:24px;max-width:66ch;text-wrap:pretty}
 .kicker{font-family:'Roboto Mono',monospace;font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--brand);display:block;margin-bottom:6px}
 .panel{background:var(--white);border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;box-shadow:var(--shadow)}
@@ -330,10 +331,9 @@ table.form select{padding:5px 7px;font-size:13px;max-width:220px}
 .wk-jump{margin-left:auto;font-size:12.5px;font-weight:500;display:inline-flex;align-items:center;gap:5px}
 .wk-jump svg{width:13px;height:13px}
 .week-band{background:var(--white);border:1px solid var(--line);border-radius:var(--radius-lg);padding:22px 24px 24px;box-shadow:var(--shadow)}
-.live-divider{display:flex;align-items:center;gap:12px;margin:40px 0 4px}
+.live-divider{display:flex;align-items:center;gap:12px;margin:36px 0 14px}
 .live-divider .kicker{margin:0}
 .live-divider::after{content:"";flex:1;height:1px;background:var(--hair)}
-.live-sub{color:var(--steel);font-size:12.5px;margin:2px 0 0;max-width:66ch}
 
 .lrow{display:flex;align-items:center;gap:13px;padding:12px 18px;border-bottom:1px solid var(--hair);cursor:pointer;text-decoration:none;color:inherit}
 .lrow:last-child{border-bottom:none}
