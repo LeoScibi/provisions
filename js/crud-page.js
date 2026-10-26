@@ -147,7 +147,35 @@
 //     is set. A "Details" button in the row's action column does the same,
 //     as a guaranteed fallback if no cell in a given row happens to do so.
 
+// One shared popover for every table's long-text cells (.cell-note): shows
+// the full text, line breaks kept, as soon as you hover. Attached to <body>
+// and positioned by hand so a panel's overflow can't clip it.
+function initNoteTips() {
+  if (initNoteTips.done) return;
+  initNoteTips.done = true;
+  const tip = document.createElement('div');
+  tip.className = 'note-tip';
+  tip.hidden = true;
+  document.body.append(tip);
+  document.addEventListener('mouseover', (e) => {
+    const cell = e.target.closest('.cell-note');
+    if (!cell) return;
+    tip.textContent = cell.dataset.note;
+    tip.hidden = false;
+    const r = cell.getBoundingClientRect();
+    const t = tip.getBoundingClientRect();
+    const below = r.bottom + 8 + t.height < innerHeight;
+    tip.style.left = `${Math.max(8, Math.min(r.left, innerWidth - t.width - 8))}px`;
+    tip.style.top = `${below ? r.bottom + 6 : r.top - t.height - 6}px`;
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (e.target.closest('.cell-note') && !e.relatedTarget?.closest?.('.cell-note')) tip.hidden = true;
+  });
+  addEventListener('scroll', () => { tip.hidden = true; }, true);
+}
+
 async function initCrudTable(config) {
+  initNoteTips();
   const { mount, title, tab, headers, autoId, fields, inlineEdit, subtitle, groupBy, catalogue, onLoad, detailSection } = config;
   // Optional category-style grouping: rows are bucketed by this header's
   // value and each bucket gets a `tr.group` heading row. Display-only —
@@ -538,13 +566,13 @@ async function initCrudTable(config) {
         ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" style="${box}object-fit:cover;display:block;">`
         : `<span style="${box}display:inline-block;"></span>`;
     }
-    // A textarea's full text shown inline would blow out row height —
-    // a small icon carries the note and reveals it via the native title
-    // tooltip on hover, keeping every row the same height.
+    // A textarea's full text would blow out row height, so the cell shows it
+    // on one line (cut off with an ellipsis) and the whole thing pops up on
+    // hover — see initNoteTips() below.
     if (field && field.type === 'textarea') {
       const v = (value || '').toString().trim();
       if (!v) return '';
-      return `<span class="note-icon" title="${escapeHtml(v)}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M15 3v5h5"/><path d="M8 13h8M8 17h5"/></svg></span>`;
+      return `<span class="cell-note" data-note="${escapeHtml(v)}">${escapeHtml(v.replace(/\s*\n+\s*/g, ', '))}</span>`;
     }
     return escapeHtml(value);
   }

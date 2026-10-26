@@ -100,9 +100,8 @@ td.cell-editable{cursor:pointer;border-radius:8px}
 td.cell-editable:hover{background:var(--brand-soft)}
 td.cell-editable input,td.cell-editable select{padding:4px 6px}
 td img{border-radius:8px}
-.note-icon{display:inline-flex;color:var(--mist);cursor:help;vertical-align:middle}
-.note-icon:hover{color:var(--brand)}
-.note-icon svg{pointer-events:none}
+.cell-note{display:inline-block;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;color:var(--slate);cursor:default}
+.note-tip{position:fixed;z-index:80;max-width:340px;padding:10px 13px;background:var(--brand-deep);color:#fff;border-radius:12px;box-shadow:var(--shadow-lg);font-size:13px;line-height:1.45;white-space:pre-line;pointer-events:none;animation:pop-in .12s ease-out}
 
 /* 'file'-type fields (js/crud-page.js fieldInputHtml) — a URL input plus an
    optional Upload button/status line, used by Products' Tech sheet field. */
