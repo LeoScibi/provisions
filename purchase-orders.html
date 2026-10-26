@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=19">
+<link rel="stylesheet" href="css/style.css?v=21">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -47,12 +47,14 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=1"></script>
 <script src="js/util.js?v=2"></script>
+<script src="js/supplier-products.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/daterange.js?v=1"></script>
 <script src="js/searchable-select.js?v=1"></script>
 <script>
   let token = null;
   let suppliers = [];
+  let supplierLinks = []; // SupplierProducts — see js/supplier-products.js
   let products = [];
   let poRowsData = [];   // [{ rowNumber, obj }] from PurchaseOrders
   let polRowsData = [];  // [{ rowNumber, obj }] from PurchaseOrderLines
@@ -145,11 +147,14 @@
     return `£${n.toFixed(2)}`;
   }
 
-  // Products can only be ordered from a supplier as whole items — anything
-  // cut from another product (Products' "Cut from (code)" field) is made
-  // in-house from stock, never bought in directly.
+  // Everything a supplier sells (its Default-supplier products plus any
+  // linked on SupplierProducts) — but only as whole items: anything cut from
+  // another product (Products' "Cut from (code)" field) is made in-house
+  // from stock, never bought in directly.
   function orderableSupplierProducts(supplier) {
-    return products.filter(p => p['Default supplier'] === supplier && !(p['Cut from (code)'] || '').trim());
+    return productsForSupplier(products, supplierLinks, supplier)
+      .map(e => e.product)
+      .filter(p => !(p['Cut from (code)'] || '').trim());
   }
 
   // Current on-hand qty for a product: every Deliveries batch's received
@@ -211,14 +216,16 @@
     const cfg = getStoredConfig();
     setStatus('Loading...');
     try {
-      const [supplierRows, productRows, poRows, polRows, deliveryRows, allocationRows] = await Promise.all([
+      const [supplierRows, productRows, poRows, polRows, deliveryRows, allocationRows, spLinks] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Suppliers!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token)
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
+        loadSupplierProducts(cfg.spreadsheetId)
       ]);
+      supplierLinks = spLinks;
       suppliers = toRowObjects(supplierRows).map(r => r.obj);
       products = toRowObjects(productRows).map(r => r.obj);
       poRowsData = toRowObjects(poRows);
@@ -636,7 +643,9 @@
     const initialSnapshot = JSON.stringify(receiveLines);
     dirtyCheck = () => JSON.stringify(receiveLines) !== initialSnapshot;
 
-    const supplierProducts = products.filter(p => p['Default supplier'] === po.obj.SUPPLIER && !receiveLines.some(l => l.code === p['Product code']));
+    const supplierProducts = productsForSupplier(products, supplierLinks, po.obj.SUPPLIER)
+      .map(e => e.product)
+      .filter(p => !receiveLines.some(l => l.code === p['Product code']));
 
     form.innerHTML = `
       <div class="dlg-h">

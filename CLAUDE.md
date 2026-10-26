@@ -63,6 +63,14 @@ models, sheet schemas, or conventions between the two.
   one-time, not partial. "Mark as delivered" (in `purchase-orders.html`) is
   the only normal path onto the Deliveries tab: it appends the resulting
   rows there and fills in each line's received qty/lot/best-before.
+- **SupplierProducts** — which suppliers sell which products (one row per
+  supplier + product, with that supplier's own product code and cost), so a
+  product can come from several suppliers. A product's `Default supplier`
+  always counts as one of its suppliers even without a row here — use
+  `productsForSupplier()` in `js/supplier-products.js` rather than filtering
+  on `Default supplier`. Edited from a supplier's record (its Products tab,
+  via `initCrudTable`'s `detailSection`); purchase orders offer everything a
+  supplier is linked to.
 - **Deliveries** — goods-in, linked to Products by `PRODUCT CODE` and
   tracked by batch/lot number + best-before date. `PO ID` traces a row back
   to the purchase order it was received against, when there is one.

@@ -77,6 +77,14 @@
 //     emptyTitle: 'Nothing in the catalogue yet',
 //     emptySub: 'Add your first product to get started.'
 //   }
+//   detailSection: {         // optional: an extra tab in the record dialog,
+//     label: 'Products',     // shown only for an existing record (not in
+//     first: true,           // Add mode) — e.g. suppliers.html lists the
+//     render: (container, pick, rowValues) => { ... }
+//   },                       // supplier's products there. `first` puts the
+//                            // tab first and opens the record on it. It
+//                            // manages its own reads/writes; the record's
+//                            // Save button doesn't touch it.
 //   onLoad: (rows, get) => { ... },  // optional: fires after each successful
 //                             // load with the fresh rowsData array (each
 //                             // entry `{ rowNumber, values }`) and the same
@@ -131,7 +139,7 @@
 //     as a guaranteed fallback if no cell in a given row happens to do so.
 
 async function initCrudTable(config) {
-  const { mount, title, tab, headers, autoId, fields, inlineEdit, subtitle, groupBy, catalogue, onLoad } = config;
+  const { mount, title, tab, headers, autoId, fields, inlineEdit, subtitle, groupBy, catalogue, onLoad, detailSection } = config;
   // Optional category-style grouping: rows are bucketed by this header's
   // value and each bucket gets a `tr.group` heading row. Display-only —
   // it never touches the sheet's row order. Suppressed while a column
@@ -385,15 +393,21 @@ async function initCrudTable(config) {
       if (!sectionFields.has(sec)) { sectionFields.set(sec, []); sectionOrder.push(sec); }
       sectionFields.get(sec).push(f);
     });
-    const hasTabs = sectionOrder.length > 1;
+    const hasTabs = sectionOrder.length > 1 || !!detailSection;
+    const EXTRA = '__extra';
+    const extraTab = detailSection ? `<button type="button" class="cat-tab" data-dlg-tab="${EXTRA}">${escapeHtml(detailSection.label)}</button>` : '';
+    const extraPanel = detailSection ? `<div class="dlg-tab-panel dlg-extra" data-dlg-panel="${EXTRA}" id="${tab}_dlgExtra" style="display:none;"></div>` : '';
 
     const fieldHtml = (f) => `<div class="col field"><label>${escapeHtml(f.label)}${f.required ? ' *' : ''}${f.type === 'file' ? ` <a href="#" class="file-field-view" id="${fid(f)}_view" target="_blank" rel="noopener">Open ↗</a>` : ''}</label>${fieldInputHtml(f)}</div>`;
     const rowClass = `row${catalogue ? ' grid3' : ''}`;
     const bodyHtml = hasTabs ? `
       <div class="cat-tabs dlg-tabs" id="${tab}_dlgTabs">
+        ${detailSection?.first ? extraTab : ''}
         ${sectionOrder.map((sec, i) => `<button type="button" class="cat-tab${i === 0 ? ' active' : ''}" data-dlg-tab="${escapeHtml(sec || '')}">${escapeHtml(sec || 'Details')}</button>`).join('')}
+        ${detailSection && !detailSection.first ? extraTab : ''}
       </div>
       ${sectionOrder.map((sec, i) => `<div class="${rowClass} dlg-tab-panel" data-dlg-panel="${escapeHtml(sec || '')}" style="${i === 0 ? '' : 'display:none;'}">${sectionFields.get(sec).map(fieldHtml).join('')}</div>`).join('')}
+      ${extraPanel}
     ` : `<div class="${rowClass}">${fields.map(fieldHtml).join('')}</div>`;
 
     form.innerHTML = `
@@ -422,14 +436,22 @@ async function initCrudTable(config) {
     if (hasTabs) {
       form.querySelector(`#${tab}_dlgTabs`).addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-dlg-tab]');
-        if (!btn) return;
-        form.querySelectorAll(`#${tab}_dlgTabs .cat-tab`).forEach(b => b.classList.toggle('active', b === btn));
-        form.querySelectorAll('.dlg-tab-panel').forEach(p => { p.style.display = p.dataset.dlgPanel === btn.dataset.dlgTab ? '' : 'none'; });
+        if (btn) showDlgTab(btn.dataset.dlgTab);
       });
     }
 
     resetFieldValues();
     wireFileFields();
+  }
+
+  // Switches the dialog's tab bar (field sections + any detailSection tab);
+  // with no key, goes to the first visible tab.
+  function showDlgTab(key) {
+    const btns = [...form.querySelectorAll('.dlg-tabs .cat-tab')].filter(b => !b.hidden);
+    if (!btns.length) return;
+    if (key === undefined) key = btns[0].dataset.dlgTab;
+    btns.forEach(b => b.classList.toggle('active', b.dataset.dlgTab === key));
+    form.querySelectorAll('.dlg-tab-panel').forEach(p => { p.style.display = p.dataset.dlgPanel === key ? '' : 'none'; });
   }
 
   function resetFieldValues() {
@@ -968,6 +990,14 @@ async function initCrudTable(config) {
     }
     setDlgStatus('');
     resetFieldValues();
+    const extraEl = root.querySelector(`#${tab}_dlgExtra`);
+    if (extraEl) {
+      extraEl.innerHTML = '';
+      form.querySelector('[data-dlg-tab="__extra"]').hidden = true;
+      // A record with only the extra tab plus plain fields doesn't need a tab bar to add one.
+      form.querySelector('.dlg-tabs').hidden = form.querySelectorAll('.dlg-tabs .cat-tab:not([hidden])').length < 2;
+      showDlgTab();
+    }
     await refreshRefOptions();
     dialogEl.showModal();
     guard.arm();
@@ -992,6 +1022,13 @@ async function initCrudTable(config) {
     // The natural key (e.g. Products.CODE) can't be changed once other tabs
     // may already reference it by that value.
     if (!autoId) form.querySelector(`#${fid(fields[0])}`).disabled = true;
+    const extraEl = root.querySelector(`#${tab}_dlgExtra`);
+    if (extraEl) {
+      form.querySelector('[data-dlg-tab="__extra"]').hidden = false;
+      form.querySelector('.dlg-tabs').hidden = false;
+      showDlgTab(detailSection.first ? '__extra' : undefined);
+      detailSection.render(extraEl, (key) => get(rowValues, key), rowValues);
+    }
     dialogEl.showModal();
     guard.arm();
   }
