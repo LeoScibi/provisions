@@ -12,16 +12,24 @@ const PROVISIONS_KEYS = {
   userName: 'provisions_userName'
 };
 
+// Accepts either a bare Spreadsheet ID or a full docs.google.com sheet URL
+// (an easy thing to paste by mistake) and returns just the ID.
+function normalizeSpreadsheetId(value) {
+  const v = (value || '').trim();
+  const m = v.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : v;
+}
+
 function getStoredConfig() {
   return {
     clientId: localStorage.getItem(PROVISIONS_KEYS.clientId) || '',
-    spreadsheetId: localStorage.getItem(PROVISIONS_KEYS.spreadsheetId) || ''
+    spreadsheetId: normalizeSpreadsheetId(localStorage.getItem(PROVISIONS_KEYS.spreadsheetId))
   };
 }
 
 function saveStoredConfig(clientId, spreadsheetId) {
   localStorage.setItem(PROVISIONS_KEYS.clientId, clientId.trim());
-  localStorage.setItem(PROVISIONS_KEYS.spreadsheetId, spreadsheetId.trim());
+  localStorage.setItem(PROVISIONS_KEYS.spreadsheetId, normalizeSpreadsheetId(spreadsheetId));
 }
 
 function getStoredToken() {

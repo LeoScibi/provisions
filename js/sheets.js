@@ -8,7 +8,9 @@ function sheetsBaseUrl(spreadsheetId) {
 
 async function sheetsHandle(res) {
   if (!res.ok) {
-    let msg = res.statusText;
+    // statusText is always empty over HTTP/2, so fall back to the status code
+    // (a non-JSON 404 usually means a malformed Spreadsheet ID).
+    let msg = res.statusText || `HTTP ${res.status}`;
     try { msg = (await res.json()).error?.message || msg; } catch (e) {}
     throw new Error(msg);
   }
