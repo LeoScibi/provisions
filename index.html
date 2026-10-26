@@ -8,10 +8,20 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=17">
+<link rel="stylesheet" href="css/style.css?v=18">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
-<body>
+<body class="signed-out">
+
+<div class="signin-screen">
+  <div class="signin-card">
+    <img class="signin-logo" src="img/logo.png" alt="Provisions — Wine &amp; Cheese">
+    <h2>Stock &amp; orders</h2>
+    <p class="sub">Sign in with your Google account to continue.</p>
+    <button type="button" class="btn" id="signInBtn">Sign in with Google</button>
+    <div class="mono js-status signin-status" role="alert"></div>
+  </div>
+</div>
 
 <div class="app-sidebar">
   <a class="brand" href="index.html" title="Provisions UK"><img src="img/logo.png" alt="Provisions"></a>
@@ -51,23 +61,7 @@
     </div>
   </div>
 
-  <div class="panel" id="authPanel">
-    <div class="panel-b" id="authArea">
-      <div class="inline">
-        <div class="field">
-          <label>Google OAuth Client ID</label>
-          <input id="clientId" placeholder="XXXXXXXXX.apps.googleusercontent.com">
-        </div>
-        <div class="field">
-          <label>Spreadsheet ID</label>
-          <input id="spreadsheetId" placeholder="Found in the sheet's URL between /d/ and /edit">
-        </div>
-      </div>
-      <button type="button" class="btn" id="saveConfigBtn">Save config</button>
-      <button type="button" class="btn ghost" id="signInBtn" style="margin-left:8px;">Sign in with Google</button>
-      <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
-    </div>
-  </div>
+  <div class="mono js-status" style="margin:-12px 0 16px; font-size:12.5px; color:var(--steel);"></div>
 
   <div id="dashCard" style="display:none;">
 
@@ -123,28 +117,24 @@
   </div>
 </main>
 
-<script src="js/config.js?v=2"></script>
-<script src="js/sheets.js?v=1"></script>
+<script src="js/config.js?v=3"></script>
+<script src="js/sheets.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
 <script>
-  const status = document.getElementById('status');
   const signInBtn = document.getElementById('signInBtn');
   let tokenClient = null;
 
+  // One status line on the sign-in screen, one under the Dashboard heading —
+  // only one is visible at a time, so both get the same message.
   function setStatus(msg, kind) {
-    status.textContent = msg;
-    status.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+    document.querySelectorAll('.js-status').forEach(el => {
+      el.textContent = msg;
+      el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+    });
   }
 
   function refreshSignedInUI() {
-    const token = tryResumeSession();
-    const authPanel = document.getElementById('authPanel');
-    if (token) {
-      setStatus('Signed in — session active.', 'ok');
-      authPanel.style.display = 'none';
-    } else {
-      authPanel.style.display = '';
-    }
+    document.body.classList.toggle('signed-out', !tryResumeSession());
     initUserBadge();
   }
 
@@ -451,30 +441,16 @@
   document.getElementById('wkJump').addEventListener('click', (e) => { e.preventDefault(); weekOffset = 0; renderWeekBand(); });
 
   window.addEventListener('load', () => {
-    const cfg = getStoredConfig();
-    document.getElementById('clientId').value = cfg.clientId;
-    document.getElementById('spreadsheetId').value = cfg.spreadsheetId;
     refreshSignedInUI();
     loadDashboard();
   });
 
-  document.getElementById('saveConfigBtn').addEventListener('click', () => {
-    const clientId = document.getElementById('clientId').value.trim();
-    const spreadsheetId = document.getElementById('spreadsheetId').value.trim();
-    if (!clientId || !spreadsheetId) { setStatus('Enter both fields before saving.', 'error'); return; }
-    saveStoredConfig(clientId, spreadsheetId);
-    setStatus('Config saved for this browser.', 'ok');
-  });
-
   signInBtn.addEventListener('click', () => {
-    const clientId = document.getElementById('clientId').value.trim();
-    if (!clientId) { setStatus('Paste your OAuth Client ID first.', 'error'); return; }
     tokenClient = initGoogleAuth({
-      clientId,
+      clientId: getStoredConfig().clientId,
       onToken: () => {
-        setStatus('Signed in — session active.', 'ok');
-        document.getElementById('authPanel').style.display = 'none';
-        initUserBadge();
+        setStatus('');
+        refreshSignedInUI();
         loadDashboard();
       },
       onError: (err) => setStatus('Sign-in error: ' + err, 'error')

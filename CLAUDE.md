@@ -9,7 +9,11 @@ models, sheet schemas, or conventions between the two.
   `main` only.
 - **Architecture:** static site, no server/build step. Every page talks
   directly to a single Google Sheet via the Sheets API v4, authenticated
-  client-side with Google OAuth (`js/config.js`, `js/sheets.js`). OAuth scope
+  client-side with Google OAuth (`js/config.js`, `js/sheets.js`). The OAuth
+  Client ID and Spreadsheet ID are hard-coded in `APP_CONFIG` in
+  `js/config.js` — there is no per-browser config; signed-out visitors land
+  on the Dashboard's full-screen sign-in card, and every other page
+  redirects there without a session. OAuth scope
   is `spreadsheets` plus `drive.file` (restricted — the app only ever sees
   files it creates itself) for the Products photo upload feature
   (`js/drive.js`), plus `userinfo.email`/`userinfo.profile` (non-sensitive)

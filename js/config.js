@@ -1,35 +1,25 @@
 // Shared config + auth helpers used by every page.
-// Config (Client ID / Spreadsheet ID) and the access token are kept in
-// localStorage so you only enter them once per browser, and pages share
-// the same signed-in session instead of re-authenticating each time.
+// The OAuth Client ID and the Spreadsheet ID are baked in below, so there's
+// nothing to configure per browser — the Dashboard just shows a sign-in
+// screen. The access token is kept in localStorage so pages share the same
+// signed-in session instead of re-authenticating each time.
+
+const APP_CONFIG = {
+  clientId: '463779305743-ha237e1vfbj5le2psr5nqpo28uhnd09a.apps.googleusercontent.com',
+  spreadsheetId: '16ODfsKSfSlPEZmIZYytIH6GmG9UOu_3brxpRTheV03E'
+};
 
 const PROVISIONS_KEYS = {
-  clientId: 'provisions_clientId',
-  spreadsheetId: 'provisions_spreadsheetId',
   token: 'provisions_accessToken',
   tokenExpiry: 'provisions_tokenExpiry',
   userEmail: 'provisions_userEmail',
   userName: 'provisions_userName'
 };
 
-// Accepts either a bare Spreadsheet ID or a full docs.google.com sheet URL
-// (an easy thing to paste by mistake) and returns just the ID.
-function normalizeSpreadsheetId(value) {
-  const v = (value || '').trim();
-  const m = v.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/);
-  return m ? m[1] : v;
-}
-
+// Kept as a function (rather than every page reading APP_CONFIG directly)
+// since all pages already call it.
 function getStoredConfig() {
-  return {
-    clientId: localStorage.getItem(PROVISIONS_KEYS.clientId) || '',
-    spreadsheetId: normalizeSpreadsheetId(localStorage.getItem(PROVISIONS_KEYS.spreadsheetId))
-  };
-}
-
-function saveStoredConfig(clientId, spreadsheetId) {
-  localStorage.setItem(PROVISIONS_KEYS.clientId, clientId.trim());
-  localStorage.setItem(PROVISIONS_KEYS.spreadsheetId, normalizeSpreadsheetId(spreadsheetId));
+  return { ...APP_CONFIG };
 }
 
 function getStoredToken() {
@@ -144,3 +134,9 @@ function initUserBadge() {
 }
 
 window.addEventListener('load', initUserBadge);
+
+// Every page but the Dashboard needs a session, so a signed-out visit (or an
+// expired token) goes straight to the Dashboard's sign-in screen.
+if (!getStoredToken() && !/\/(index\.html)?$/.test(location.pathname)) {
+  location.replace('index.html');
+}
