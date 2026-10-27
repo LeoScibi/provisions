@@ -197,6 +197,10 @@ tr.group .g-count{font-family:'Roboto Mono',monospace;font-size:11px;color:var(-
 .cat-row.picker-row{cursor:default}
 .cat-row.picker-row .cr-photo{width:44px;height:44px}
 .cr-stock{font-family:'Roboto Mono',monospace;font-size:11.5px;color:var(--mist);margin-top:3px}
+.cr-stock b{font-weight:600;color:var(--steel)}
+.cr-stock b.neg{color:var(--crit)}
+.cr-incoming{margin-top:1px;color:var(--chill)}
+.cr-incoming b{color:var(--chill)}
 .cr-stepper{display:flex;align-items:center;gap:10px;flex:none;margin-left:auto}
 .stepper-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;color:var(--ink);background:var(--white);flex:none}
 .stepper-btn:hover:not(:disabled){background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}

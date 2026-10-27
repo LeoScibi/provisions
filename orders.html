@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=28">
+<link rel="stylesheet" href="css/style.css?v=29">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -46,7 +46,8 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
-<script src="js/product-ui.js?v=1"></script>
+<script src="js/stock-calc.js?v=2"></script>
+<script src="js/product-ui.js?v=2"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=1"></script>
 <script>
@@ -59,6 +60,9 @@
   let orderLinesData = [];  // [{ rowNumber, obj }] from OrderLines
   let allocationsData = []; // [{ rowNumber, obj }] from Allocations
   let deliveriesData = [];  // [{ rowNumber, obj }] from Deliveries — source of what's in stock, per lot
+  let purchaseOrders = [];  // PurchaseOrders — for what's arriving, shown in the product picker
+  let poLines = [];         // PurchaseOrderLines
+  let stockPos = {};        // computeStockPosition() result, refreshed each time the picker renders
   let sheetIds = {};         // tab name -> sheetId, lazily populated (needed to delete an allocation row)
   let draftLines = [];       // working line items being staged — New Order wizard, or "add product" in the View dialog
   let activeSummaryId = 'ord_orderSummary'; // which dialog's summary element renderOrderSummary() writes to, set by renderProductPicker()
@@ -158,14 +162,18 @@
     const cfg = getStoredConfig();
     setStatus('Loading...');
     try {
-      const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows] = await Promise.all([
+      const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token)
+        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token)
       ]);
+      purchaseOrders = toRowObjects(poRows).map(r => r.obj);
+      poLines = toRowObjects(polRows).map(r => r.obj);
       customers = toRowObjects(customerRows).map(r => r.obj);
       products = toRowObjects(productRows).map(r => r.obj);
       registerProducts(products);
@@ -334,6 +342,11 @@
   // View dialog's picker (irrelevant — always empty — for a brand-new order).
   function renderProductPicker(mountId = 'ord_productPicker', searchId = 'ord_productSearch', excludeCodes = [], summaryId = 'ord_orderSummary') {
     activeSummaryId = summaryId;
+    stockPos = computeStockPosition({
+      deliveries: deliveriesData.map(r => r.obj), allocations: allocationsData.map(r => r.obj),
+      orders: ordersData.map(r => r.obj), orderLines: orderLinesData.map(r => r.obj),
+      purchaseOrders, poLines
+    });
     const mount = form.querySelector(`#${mountId}`);
     let orderProducts = products.filter(p => (p.Active || 'Yes') !== 'No' && !excludeCodes.includes(p['Product code']));
     if (!orderProducts.length) {
@@ -393,14 +406,18 @@
       ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">`
       : `<span class="cr-photo"></span>`;
     const subText = [p['Producer'], meta.isCase ? `${meta.perCase} × ${meta.unit === 'kg' ? (parseFloat(p['Nominal weight (kg)']) || '?') + 'kg' : '1 piece'} per case` : `Ordered per ${meta.unit === 'kg' ? 'kg' : 'piece'}`].filter(Boolean).join(' · ');
-    const stockText = `On hand ${qtyUnit(stockOnHand(code), meta.unit)}`;
+    // A cut portion has no stock of its own — show the whole it's cut from.
+    const parent = p['Cut from (code)'] ? productOf(p['Cut from (code)']) : null;
+    const stockHtml = parent
+      ? stockPositionHtml(stockPos[parent['Product code']], productOrderMeta(parent).unit, `Cut from ${parent['Product code']}`)
+      : stockPositionHtml(stockPos[code], meta.unit);
     return `
       <div class="cat-row picker-row" data-code="${escapeHtml(code)}">
         ${photoHtml}
         <div class="cr-info">
           <div class="cr-name-line"><span class="cr-name">${escapeHtml(p['Product name'])}</span></div>
           <div class="cr-sub">${escapeHtml(subText)}</div>
-          <div class="cr-stock">${escapeHtml(stockText)}</div>
+          ${stockHtml}
         </div>
         <div class="cr-stepper">
           <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(code)}" ${qty <= 0 ? 'disabled' : ''} aria-label="Remove one">−</button>
@@ -720,13 +737,6 @@
   function deliveryBbeFor(productCode, batch) {
     const d = deliveriesData.find(r => r.obj['PRODUCT CODE'] === productCode && r.obj['BATCH/LOT NUMBER'] === batch);
     return d ? d.obj['BEST BEFORE DATE'] : '';
-  }
-
-  // Current on-hand qty for a product: every Deliveries batch's received
-  // qty, minus whatever's already been Allocated against it — same calc as
-  // computeAvailableBatches above, just summed rather than kept per-batch.
-  function stockOnHand(code) {
-    return roundQty(computeAvailableBatches(code).reduce((sum, b) => sum + b.remaining, 0));
   }
 
   async function handleAllocate(order, lineId) {

@@ -112,3 +112,26 @@ function attachOrderHoverCard(container, selector, build) {
   container.addEventListener('click', hide);
   window.addEventListener('scroll', hide, { passive: true });
 }
+
+// The stock lines under a product in the order and PO pickers, from one
+// entry of computeStockPosition() (js/stock-calc.js). A cut portion holds
+// no stock of its own, so `fromParent` labels figures borrowed from the
+// whole product it's cut from.
+const STOCK_INCOMING_SHOWN = 3;
+
+function stockPositionHtml(pos, unit, fromParent) {
+  pos = pos || { inStock: 0, allocated: 0, free: 0, incoming: [] };
+  const q = n => escapeHtml(qtyUnit(n, unit));
+  const day = iso => {
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+  const when = i => !i.start ? 'date TBC' : (i.end && i.end !== i.start ? `${day(i.start)}–${day(i.end)}` : day(i.start));
+  const shown = pos.incoming.slice(0, STOCK_INCOMING_SHOWN);
+  return `
+    <div class="cr-stock">
+      ${fromParent ? `<span class="muted">${escapeHtml(fromParent)}:</span> ` : ''}In stock <b>${q(pos.inStock)}</b> · Allocated <b>${q(pos.allocated)}</b> · Free <b class="${pos.free <= 0 ? 'neg' : ''}">${q(pos.free)}</b>
+    </div>
+    ${shown.length ? `<div class="cr-stock cr-incoming">Arriving ${shown.map(i =>
+      `<b>${escapeHtml(qtyUnit(i.qty, i.unit || unit))}</b> ${escapeHtml(when(i))} <span class="muted">(${escapeHtml(i.poId)})</span>`).join(' · ')}${pos.incoming.length > shown.length ? ` · +${pos.incoming.length - shown.length} more` : ''}</div>` : ''}`;
+}

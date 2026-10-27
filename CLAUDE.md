@@ -74,7 +74,10 @@ models, sheet schemas, or conventions between the two.
   rows there and fills in each line's received qty/lot/best-before.
 - **Stock on hand** is never stored: it's each Deliveries batch's received
   qty minus its Allocations. `computeStockByProduct()` in `js/stock-calc.js`
-  is the shared version (Products' cards use it); stock.html, index.html,
+  is the shared version (Products' cards use it); `computeStockPosition()`
+  next to it splits that into in stock / allocated (to orders not yet
+  dispatched) / free, plus what's arriving on open POs, for the order and
+  PO product pickers; stock.html, index.html,
   purchase-orders.html and orders.html still carry their own copies of the
   same maths.
 - **SupplierProducts** — which suppliers sell which products (one row per

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=28">
+<link rel="stylesheet" href="css/style.css?v=29">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -46,7 +46,8 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
-<script src="js/product-ui.js?v=1"></script>
+<script src="js/stock-calc.js?v=2"></script>
+<script src="js/product-ui.js?v=2"></script>
 <script src="js/supplier-products.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/daterange.js?v=1"></script>
@@ -60,6 +61,9 @@
   let polRowsData = [];  // [{ rowNumber, obj }] from PurchaseOrderLines
   let deliveriesData = [];   // flat objs from Deliveries — on-hand stock, per batch
   let allocationsData = [];  // flat objs from Allocations — stock already spoken for
+  let ordersData = [];       // flat objs from Orders — which allocations have been dispatched
+  let orderLinesData = [];   // flat objs from OrderLines
+  let stockPos = {};         // computeStockPosition() result, refreshed each time the picker renders
   let draftLines = [];   // working line items while creating a PO
   let receiveLines = []; // working line items while receiving a PO
   let dateRangePicker = null;
@@ -161,42 +165,6 @@
       .filter(p => !(p['Cut from (code)'] || '').trim());
   }
 
-  // Current on-hand qty for a product: every Deliveries batch's received
-  // qty, minus whatever's already been Allocated against it — same calc as
-  // stock.html's "On hand by product".
-  function stockOnHand(code) {
-    const byBatch = {};
-    deliveriesData.forEach(d => {
-      if (d['PRODUCT CODE'] !== code) return;
-      const key = d['BATCH/LOT NUMBER'];
-      byBatch[key] = (byBatch[key] || 0) + (parseFloat(d['QTY RECEIVED']) || 0);
-    });
-    allocationsData.forEach(a => {
-      if (a['PRODUCT CODE'] !== code || byBatch[a['BATCH/LOT NUMBER']] === undefined) return;
-      byBatch[a['BATCH/LOT NUMBER']] -= parseFloat(a['QTY ALLOCATED']) || 0;
-    });
-    return roundQty(Object.values(byBatch).reduce((sum, remaining) => sum + (remaining > 0.0001 ? remaining : 0), 0));
-  }
-
-  // Stock already on order from a supplier but not yet received: every
-  // PurchaseOrderLine for this product whose parent PO is still "Ordered".
-  // Cancelling a PO only flips the PO's own STATUS (see handleCancelPo) —
-  // the line's own STATUS stays "Ordered" until a delivery is recorded
-  // against it — so the parent PO's status is what actually matters here.
-  function incomingForProduct(code) {
-    let qty = 0;
-    let nextDate = null;
-    polRowsData.forEach(l => {
-      if (l.obj['PRODUCT CODE'] !== code) return;
-      const po = poRowsData.find(p => p.obj.ID === l.obj['PO ID']);
-      if (!po || (po.obj.STATUS && po.obj.STATUS !== 'Ordered')) return;
-      qty += parseFloat(l.obj['QTY ORDERED']) || 0;
-      const d = po.obj['EXPECTED START DATE'];
-      if (d && (!nextDate || d < nextDate)) nextDate = d;
-    });
-    return { qty: roundQty(qty), nextDate };
-  }
-
   // Case-ordered products (Ordering unit = Case) can only be ordered in
   // whole cases — the +/- stepper below moves qty by one case at a time,
   // converted into the product's own tracked unit (kg or pc).
@@ -220,13 +188,15 @@
     const cfg = getStoredConfig();
     setStatus('Loading...');
     try {
-      const [supplierRows, productRows, poRows, polRows, deliveryRows, allocationRows, spLinks] = await Promise.all([
+      const [supplierRows, productRows, poRows, polRows, deliveryRows, allocationRows, orderRows, lineRows, spLinks] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Suppliers!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
         loadSupplierProducts(cfg.spreadsheetId)
       ]);
       supplierLinks = spLinks;
@@ -237,6 +207,8 @@
       polRowsData = toRowObjects(polRows);
       deliveriesData = toRowObjects(deliveryRows).map(r => r.obj);
       allocationsData = toRowObjects(allocationRows).map(r => r.obj);
+      ordersData = toRowObjects(orderRows).map(r => r.obj);
+      orderLinesData = toRowObjects(lineRows).map(r => r.obj);
       renderTable();
       setStatus(`Loaded ${poRowsData.length} purchase order(s).`, 'ok');
       checkDeepLink();
@@ -403,6 +375,11 @@
       renderOrderSummary();
       return;
     }
+    stockPos = computeStockPosition({
+      deliveries: deliveriesData, allocations: allocationsData,
+      orders: ordersData, orderLines: orderLinesData,
+      purchaseOrders: poRowsData.map(r => r.obj), poLines: polRowsData.map(r => r.obj)
+    });
     let supplierProducts = orderableSupplierProducts(supplier);
     if (!supplierProducts.length) {
       mount.innerHTML = `<div class="empty" style="padding:12px 0;">No orderable products set up for this supplier — anything cut from another product doesn't show here.</div>`;
@@ -456,18 +433,13 @@
       ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">`
       : `<span class="cr-photo"></span>`;
     const subText = [p['Producer'], meta.isCase ? `${meta.perCase} × ${meta.unit === 'kg' ? (parseFloat(p['Nominal weight (kg)']) || '?') + 'kg' : '1 piece'} per case` : `Ordered per ${meta.unit === 'kg' ? 'kg' : 'piece'}`].filter(Boolean).join(' · ');
-    const onHand = stockOnHand(code);
-    const incoming = incomingForProduct(code);
-    const stockText = `On hand ${qtyUnit(onHand, meta.unit)}` + (incoming.qty > 0
-      ? ` · ${qtyUnit(incoming.qty, meta.unit)} arriving${incoming.nextDate ? ' ' + fmtDateShort(incoming.nextDate) : ''}`
-      : '');
     return `
       <div class="cat-row picker-row" data-code="${escapeHtml(code)}">
         ${photoHtml}
         <div class="cr-info">
           <div class="cr-name-line"><span class="cr-name">${escapeHtml(p['Product name'])}</span></div>
           <div class="cr-sub">${escapeHtml(subText)}</div>
-          <div class="cr-stock">${escapeHtml(stockText)}</div>
+          ${stockPositionHtml(stockPos[code], meta.unit)}
         </div>
         <div class="cr-stepper">
           <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(code)}" ${qty <= 0 ? 'disabled' : ''} aria-label="Remove one">−</button>
