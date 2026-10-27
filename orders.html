@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=32">
+<link rel="stylesheet" href="css/style.css?v=33">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -460,7 +460,9 @@
     if (!units) return '';
     const parts = decompose(fam, units);
     const kg = parts.reduce((s, x) => s + x.count * x.portion.kg, 0);
-    return `= ${parts.map(x => `${x.count > 1 ? x.count + ' × ' : ''}${x.portion.label}`).join(' + ')}${kg ? ` · ≈ ${roundQty(kg)}kg` : ''}`;
+    // "wheel" dropped from fractions to keep it to one line: "Cut: 2 × 1/4 + 1/16 · ≈ 20.3kg".
+    const short = l => /\d\s*\/\s*\d/.test(l) ? l.replace(/\s*wheel$/i, '') : l;
+    return `Cut: ${parts.map(x => `${x.count > 1 ? x.count + ' × ' : ''}${short(x.portion.label)}`).join(' + ')}${kg ? ` · ≈ ${roundQty(kg)}kg` : ''}`;
   }
 
   function familyPickerRowHtml(fam) {
@@ -479,13 +481,13 @@
           <div class="cr-name-line"><span class="cr-name">${escapeHtml(fam.name)}</span></div>
           <div class="cr-sub">${escapeHtml(subText)}</div>
           ${stockHtml}
+          <div class="cr-cut" title="${escapeHtml(familyHint(fam, units))}">${escapeHtml(familyHint(fam, units))}</div>
         </div>
         <div class="cr-stepper">
           <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(fam.code)}" ${units <= 0 ? 'disabled' : ''} aria-label="Remove one piece">−</button>
           <div class="stepper-qty">
             <input type="number" class="stepper-qty-input" data-code="${escapeHtml(fam.code)}" value="${units || ''}" placeholder="0" min="0" step="1">
             <span class="stepper-unit-suffix">× ${escapeHtml(fam.small.label)}</span>
-            <span class="stepper-sub">${escapeHtml(familyHint(fam, units))}</span>
           </div>
           <button type="button" class="stepper-btn" data-step="1" data-code="${escapeHtml(fam.code)}" aria-label="Add one piece">+</button>
         </div>
@@ -501,7 +503,8 @@
     const row = form.querySelector(`.picker-row[data-code="${CSS.escape(fam.code)}"]`);
     if (row) {
       if (!opts.skipInputValue) row.querySelector('.stepper-qty-input').value = units || '';
-      row.querySelector('.stepper-sub').textContent = familyHint(fam, units);
+      const cut = row.querySelector('.cr-cut');
+      cut.textContent = cut.title = familyHint(fam, units);
       row.querySelector('[data-step="-1"]').disabled = units <= 0;
     }
     renderOrderSummary();
