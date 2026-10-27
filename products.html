@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=31">
+<link rel="stylesheet" href="css/style.css?v=32">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -21,17 +21,26 @@
       <span class="kicker">Item master</span>
       <h2>Products</h2>
     </div>
-    <div id="productsActions" style="display:none; gap:9px; flex:none; padding-top:8px;">
-      <button type="button" class="btn ghost" id="bulkPhotosBtn" title="Select image files named after product codes (e.g. CCS050.jpg) — matched files upload to Drive and are set as that product's photo.">Bulk photos</button>
-      <button type="button" class="btn" id="addProductBtn">+ Add product</button>
+    <div id="productsActions" style="display:none; gap:9px; flex:none; padding-top:8px; flex-wrap:wrap; align-items:center;">
+      <div class="seg" role="tablist" aria-label="View">
+        <button type="button" class="seg-btn" data-view="products" role="tab">Products</button>
+        <button type="button" class="seg-btn" data-view="skus" role="tab">SKUs</button>
+      </div>
+      <button type="button" class="btn ghost" id="groupBtn" data-for="products" title="Put every SKU that isn't in a product yet into one — previewed before anything is written.">Group SKUs into products</button>
+      <button type="button" class="btn ghost" id="bulkPhotosBtn" data-for="skus" title="Select image files named after SKU codes (e.g. CCS050.jpg) — matched files upload to Drive and are set as that SKU's photo.">Bulk photos</button>
+      <button type="button" class="btn" id="addProductBtn" data-for="products">+ Add product</button>
+      <button type="button" class="btn" id="addSkuBtn" data-for="skus">+ Add SKU</button>
     </div>
   </div>
+
+  <div id="ungroupedNote"></div>
 
   <div id="signedOutNotice" class="note" style="display:none;">
     Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
   </div>
 
-  <div id="productsMount"></div>
+  <div id="groupsMount" data-for="products"></div>
+  <div id="productsMount" data-for="skus"></div>
 </main>
 
 <dialog id="photosDialog">
@@ -57,16 +66,30 @@
   </div>
 </dialog>
 
+<dialog id="groupDialog">
+  <div class="dlg-h">
+    <div><div class="ttl">Group SKUs into products</div></div>
+    <button type="button" class="dlg-close" data-close aria-label="Close">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="dlg-b" id="groupBody"></div>
+  <div class="dlg-f">
+    <button type="button" class="btn ghost" data-close>Cancel</button>
+    <button type="button" class="btn" id="groupApplyBtn" disabled>Create</button>
+  </div>
+</dialog>
+
 <script src="js/config.js?v=4"></script>
-<script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=4"></script>
+<script src="js/sheets.js?v=4"></script>
+<script src="js/shell.js?v=5"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/drive.js?v=3"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/stock-calc.js?v=2"></script>
-<script src="js/crud-page.js?v=20"></script>
+<script src="js/crud-page.js?v=21"></script>
 <script>
   function requireAuth() {
     const cfg = getStoredConfig();
@@ -155,14 +178,390 @@
     return { n, u: lvl.unit === 'kg' ? 'kg' : 'pcs', l: lvl.state === 'low' ? 'low stock' : 'in stock', tone: lvl.state === 'low' ? 'warn' : 'ok' };
   }
 
+  // ---- Products view: one card per product (the ProductGroups tab) ----
+  //
+  // A product owns the photo, spec sheet and training notes; its SKUs are
+  // Products rows whose Group ID points at it. Each is a Wholesale SKU
+  // (e.g. a whole wheel plus its portions), except the codes in the
+  // product's Shop SKU / Selfridges SKU fields, which fill those two
+  // channels — one SKU each, either may be empty.
+
+  const GROUP_HEADERS = ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category'];
+  const CATEGORIES = ['Biscuits','Charcuterie','Cheese','Condiment','Deli & Snacks','Jam','Non-Food','Oil','Pasta','Preserved Veg','Pâté & Terrine','Ready Meals','Tinned Fish','Vinegar'];
+
+  let skusTable = null, groupsTable = null, skuOpenEdit = null;
+  // From the SKUs table's last load: every SKU as a header-keyed object
+  // (plus rowNumber), grouped by Group ID; groupCol is Products."Group ID"'s
+  // column letter, null until Setup has added it.
+  let skuIndex = { all: [], byGroup: {}, byCode: {}, groupCol: null };
+  let openGroupSkus = null; // re-renders an open product's SKUs tab after a change
+
+  function indexSkus(rows, get) {
+    const head = ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID'];
+    const all = rows.map(r => ({ rowNumber: r.rowNumber, ...Object.fromEntries(head.map(h => [h, (get(r.values, h) ?? '').toString()])) }))
+      .filter(p => p['Product code']);
+    const byGroup = {}, byCode = {};
+    all.forEach(p => {
+      byCode[p['Product code']] = p;
+      if (p['Group ID']) (byGroup[p['Group ID']] = byGroup[p['Group ID']] || []).push(p);
+    });
+    skuIndex = { all, byGroup, byCode, groupCol: colLetter(head.indexOf('Group ID') + 1) };
+    registerProducts(all);
+    renderUngroupedNote();
+    groupsTable?.then(g => g.rerender());
+    openGroupSkus?.();
+  }
+
+  const groupSkus = pick => skuIndex.byGroup[pick('ID')] || [];
+  // The SKU that speaks for the product on its card: the whole (not cut
+  // from anything), heaviest first.
+  function mainSku(pick) {
+    const skus = groupSkus(pick).filter(p => p['Product code'] !== (pick('Shop SKU') || '').trim() && p['Product code'] !== (pick('Selfridges SKU') || '').trim());
+    const list = skus.length ? skus : groupSkus(pick);
+    return list.filter(p => !p['Cut from (code)']).sort((a, b) => (parseFloat(b['Nominal weight (kg)']) || 0) - (parseFloat(a['Nominal weight (kg)']) || 0))[0] || list[0] || null;
+  }
+  const skuPick = sku => key => (sku ? sku[key] : '') || '';
+
+  function groupStock(pick) {
+    const main = mainSku(pick);
+    if (!main || !stockByCode) return main ? null : { n: '—', u: '', l: 'no SKUs', tone: 'muted' };
+    return stockFigure(skuPick(main));
+  }
+
+  function groupBadges(pick) {
+    const skus = groupSkus(pick);
+    if (!skus.length) return [{ text: 'No SKUs', tone: 'warn' }];
+    const list = [];
+    if (skus.some(p => !p['Xero item code'])) list.push({ text: 'No Xero code', tone: 'warn' });
+    return list;
+  }
+
+  function renderUngroupedNote() {
+    const n = skuIndex.all.filter(p => !p['Group ID']).length;
+    document.getElementById('ungroupedNote').innerHTML = n && readView() === 'products' ? `
+      <div class="note info" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span><strong>${n} SKU(s) aren't in a product yet</strong> — they only show under SKUs.</span>
+        <button type="button" class="btn ghost sm" onclick="openGrouping()">Group them</button>
+      </div>` : '';
+  }
+
+  const fileSlug = s => 'product-' + searchNorm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  function initGroupsTable() {
+    return initCrudTable({
+      mount: '#groupsMount',
+      title: 'Products',
+      tab: 'ProductGroups',
+      headers: GROUP_HEADERS,
+      autoId: 'PG',
+      fields: [
+        { key: 'Product name', label: 'Product name', type: 'text', required: true, primary: true, placeholder: 'e.g. Comté Petite 10/14M' },
+        { key: 'Shop SKU', label: 'Shop SKU', type: 'text', placeholder: 'SKU / Xero code used by the shops' },
+        { key: 'Selfridges SKU', label: 'Selfridges SKU', type: 'text', placeholder: 'SKU / Xero code used for Selfridges' },
+        { key: 'Nominal wheel weight (kg)', label: 'Nominal wheel weight (kg)', type: 'number', placeholder: 'Cheese cut from a wheel only' },
+        {
+          key: 'Photo URL', label: 'Photo', type: 'image', placeholder: 'https://... — or upload below',
+          onUpload: async (file, getField) => {
+            const name = getField('Product name');
+            if (!name) throw new Error('Enter the product name first.');
+            const folderId = await driveEnsureFolder(tryResumeSession());
+            return driveUploadProductPhoto(folderId, fileSlug(name), file, tryResumeSession());
+          }
+        },
+        {
+          key: 'Tech sheet URL', label: 'Spec sheet', type: 'file', section: 'Docs & training',
+          placeholder: 'https://... — paste a link, or upload a file below',
+          onUpload: async (file, getField) => {
+            const name = getField('Product name');
+            if (!name) throw new Error('Enter the product name first.');
+            const folderId = await driveEnsureDocsFolder(tryResumeSession());
+            return driveUploadProductDoc(folderId, fileSlug(name), file, tryResumeSession());
+          }
+        },
+        { key: 'Training notes', label: 'Training notes', type: 'textarea', section: 'Docs & training', placeholder: 'Cutting, storage, allergens, talking points…' },
+        { key: 'Notes', label: 'Notes', type: 'textarea' },
+        { key: 'Active', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No' },
+        { key: 'Category', label: 'Category', type: 'select', options: CATEGORIES }
+      ],
+      catalogue: {
+        layout: 'cards',
+        stock: groupStock,
+        tabsBy: 'Category',
+        groupBy: 'Category',
+        photo: (pick) => (pick('Photo URL') || '').trim() || productPhoto(mainSku(pick)),
+        name: 'Product name',
+        tag: (pick) => { const s = skuPick(mainSku(pick)); return { text: s('Storage'), on: s('Storage') === 'Chilled' }; },
+        sub: (pick) => { const s = skuPick(mainSku(pick)), n = groupSkus(pick).length; return [s('Producer'), s('Default supplier'), n > 1 ? `${n} SKUs` : ''].filter(Boolean).join(' · '); },
+        meta: (pick) => { const n = groupSkus(pick).length; return [`${n} SKU${n === 1 ? '' : 's'}`, skuPick(mainSku(pick))('Product code')]; },
+        prices: [{ label: 'Landed', get: (pick) => currency(skuPick(mainSku(pick))('Landed cost £')), big: true }],
+        gpLabel: 'GP',
+        gp: (pick) => { const g = gpInfo(skuPick(mainSku(pick))); return { text: g.text, color: g.color }; },
+        badges: groupBadges,
+        stats: (rows, get) => {
+          const pick = (r) => (key) => get(r.values, key);
+          const skuCount = skuIndex.all.length;
+          const needsAttn = rows.filter(r => groupBadges(pick(r)).length > 0).length;
+          const cats = new Set(rows.map(r => pick(r)('Category')).filter(Boolean));
+          const isShort = (pick) => { const m = mainSku(pick); return !!m && ['low', 'out'].includes(stockLevel(skuPick(m))?.state); };
+          const short = stockByCode ? rows.filter(r => isShort(pick(r))).length : null;
+          return [
+            { l: 'Products', n: String(rows.length), u: `${skuCount} SKUs` },
+            { l: 'Low or out of stock', n: short === null ? '…' : String(short), u: 'products', tone: short ? 'crit' : undefined, key: 'short', filter: isShort },
+            { l: 'Needs attention', n: String(needsAttn), u: 'products', tone: needsAttn > 0 ? 'warn' : undefined, key: 'attention', filter: (pick) => groupBadges(pick).length > 0 },
+            { l: 'Categories', n: String(cats.size), u: 'in use' }
+          ];
+        },
+        kicker: (pick) => [pick('Category'), pick('ID')].filter(Boolean).join(' · '),
+        detailSub: (pick) => { const s = skuPick(mainSku(pick)); const pr = s('Producer'), su = s('Default supplier'); return pr && su ? `${pr} · via ${su}` : (pr || su || ''); },
+        emptyTitle: 'No products yet',
+        emptySub: 'Use "Group SKUs into products" to build them from your SKUs, or add one.'
+      },
+      detailSection: { label: 'SKUs', first: true, render: (container, pick) => renderGroupSkus(container, pick) },
+      // Every product's photo, so SKU cards and thumbnails show it too.
+      onLoad: (rows, get) => {
+        registerProductGroups(rows.map(r => ({ ID: get(r.values, 'ID'), 'Photo URL': get(r.values, 'Photo URL') })));
+        skusTable?.then(p => p.rerender());
+        openGroupSkus?.();
+      }
+    });
+  }
+
+  // The SKUs tab of a product: Wholesale (link / unlink / add), Shop and
+  // Selfridges. Clicking a SKU opens its own record on top.
+  function renderGroupSkus(container, pick) {
+    const id = pick('ID');
+    openGroupSkus = () => { if (container.isConnected) renderGroupSkus(container, pick); else openGroupSkus = null; };
+    const shop = (pick('Shop SKU') || '').trim(), selfridges = (pick('Selfridges SKU') || '').trim();
+    const wholesale = (skuIndex.byGroup[id] || []).filter(p => p['Product code'] !== shop && p['Product code'] !== selfridges)
+      .sort((a, b) => (parseFloat(b['Nominal weight (kg)']) || 0) - (parseFloat(a['Nominal weight (kg)']) || 0));
+    const unlinked = skuIndex.all.filter(p => !p['Group ID']).sort((a, b) => (a['Product name'] || '').localeCompare(b['Product name'] || ''));
+    const col = skuIndex.groupCol;
+
+    const skuRow = (p, removable) => `
+      <div class="cz-sku" data-open-sku="${p.rowNumber}" title="Open this SKU">
+        ${productThumb(p, 'xs')}
+        <div class="cz-sku-t"><div class="cz-sku-name">${escapeHtml(p['Product name'])}</div>
+          <div class="code">${escapeHtml(p['Product code'])}${p['Cut from (code)'] ? ` · cut from ${escapeHtml(p['Cut from (code)'])}` : ''}${p['Nominal weight (kg)'] ? ` · ${escapeHtml(p['Nominal weight (kg)'])}kg` : ''}</div></div>
+        ${removable ? `<button type="button" class="sp-remove" data-unlink="${escapeHtml(p['Product code'])}" title="Take out of this product" aria-label="Take ${escapeHtml(p['Product name'])} out of this product"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ''}
+      </div>`;
+    const channel = (label, code) => {
+      if (!code) return `<div class="cz-empty">No ${label} SKU — set one under Details if it's sold there.</div>`;
+      const p = skuIndex.byCode[code];
+      return p ? skuRow(p, false) : `<div class="cz-sku"><span class="pthumb pthumb-xs"></span><div class="cz-sku-t"><div class="cz-sku-name">${escapeHtml(code)}</div><div class="code">Not in SKUs — likely only in Xero</div></div></div>`;
+    };
+
+    container.innerHTML = `
+      <div class="sp-section">
+        <div class="cz-channel"><h4>Wholesale <span class="code">${wholesale.length}</span></h4>
+          ${wholesale.length ? wholesale.map(p => skuRow(p, true)).join('') : '<div class="cz-empty">No wholesale SKUs yet.</div>'}
+          <div class="cz-link">
+            <select id="pg_linkSel"><option value="">Add an existing SKU…</option>${unlinked.map(p => `<option value="${escapeHtml(p['Product code'])}">${escapeHtml(p['Product name'])} (${escapeHtml(p['Product code'])})</option>`).join('')}</select>
+            <button type="button" class="btn ghost sm" id="pg_linkBtn">Add</button>
+            <button type="button" class="btn ghost sm" id="pg_newBtn">+ New SKU</button>
+          </div>
+        </div>
+        <div class="cz-channel"><h4>Shop</h4>${channel('Shop', shop)}</div>
+        <div class="cz-channel"><h4>Selfridges</h4>${channel('Selfridges', selfridges)}</div>
+      </div>`;
+
+    const setGroup = async (code, value) => {
+      const p = skuIndex.byCode[code];
+      await sheetsUpdateRange(getStoredConfig().spreadsheetId, `Products!${col}${p.rowNumber}`, [[value]]);
+      showToast(value ? `Added ${p['Product name']}` : `Took out ${p['Product name']}`);
+      (await skusTable).reload(); // re-indexes, which re-renders this tab
+    };
+    container.querySelector('#pg_linkBtn').addEventListener('click', () => {
+      const code = container.querySelector('#pg_linkSel').value;
+      if (code) setGroup(code, id).catch(err => showToast('Couldn’t add: ' + err.message, 'error'));
+    });
+    container.querySelector('#pg_newBtn').addEventListener('click', async () =>
+      (await skusTable).openAdd({ 'Group ID': id, 'Category': pick('Category') || '' }));
+    container.querySelectorAll('[data-unlink]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      setGroup(b.dataset.unlink, '').catch(err => showToast('Couldn’t take it out: ' + err.message, 'error'));
+    }));
+    container.querySelectorAll('[data-open-sku]').forEach(r => r.addEventListener('click', () => skuOpenEdit?.(parseInt(r.dataset.openSku, 10))));
+    enhanceSelect(container.querySelector('#pg_linkSel'));
+  }
+
+  // ---- views ----
+
+  const VIEW_KEY = 'provisions_productsView';
+  function readView() { try { return localStorage.getItem(VIEW_KEY) === 'skus' ? 'skus' : 'products'; } catch (e) { return 'products'; } }
+  function setView(view) {
+    try { localStorage.setItem(VIEW_KEY, view); } catch (e) {}
+    // The inactive view's table is collapsed, not hidden, so its dialogs can
+    // still open on top (a product's SKUs tab opens a SKU's record).
+    document.querySelectorAll('[data-for]').forEach(el => {
+      if (el.tagName === 'BUTTON') el.hidden = el.dataset.for !== view;
+      else el.classList.toggle('view-off', el.dataset.for !== view);
+    });
+    document.querySelectorAll('[data-view]').forEach(b => { b.classList.toggle('on', b.dataset.view === view); b.setAttribute('aria-selected', b.dataset.view === view); });
+    renderUngroupedNote();
+  }
+
+  // ---- grouping SKUs into products (re-runnable) ----
+  //
+  // A cut portion belongs to the whole it's "Cut from"; otherwise the
+  // product is everything before " — " in the name ("Comté Petite 10/14M
+  // — 1/4 wheel 9kg" → "Comté Petite 10/14M"), so a portion missing its
+  // "Cut from" still lands with its whole. A name without " — " is a
+  // product with one SKU, its trailing weight dropped ("Brie Dongé 3kg" →
+  // "Brie Dongé") unless that would merge two sizes — different sizes stay
+  // separate products ("Fig & Honey Chutney 210g" / "3kg"). A
+  // "(Selfridges)" SKU fills the Selfridges slot of the one product with the
+  // same name, or becomes a product of its own. SKUs already in a product
+  // are left alone and a product that already exists by name is reused, so
+  // it's safe to re-run; existing products missing a Category get their
+  // SKUs' one.
+
+  const SELFRIDGES_RE = /\s*\(Selfridges\)\s*$/i;
+  const WEIGHT_RE = /\s+\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(?:kg|g|ml|l)$/i;
+
+  function planGroups(skus, groups) {
+    const byCode = Object.fromEntries(skus.map(p => [p['Product code'], p]));
+    const rootOf = p => { let cur = p; for (let n = 0; n < 3 && cur['Cut from (code)'] && byCode[cur['Cut from (code)']]; n++) cur = byCode[cur['Cut from (code)']]; return cur; };
+    const baseName = p => {
+      const name = (p['Product name'] || '').replace(SELFRIDGES_RE, '').trim();
+      const i = name.indexOf(' — ');
+      return { name: i >= 0 ? name.slice(0, i).trim() : name, dashed: i >= 0 };
+    };
+    const candidates = skus.filter(p => !p['Group ID']);
+    const plan = new Map();
+
+    candidates.filter(p => !SELFRIDGES_RE.test(p['Product name'] || '')).forEach(p => {
+      const { name, dashed } = baseName(rootOf(p));
+      const key = searchNorm(name);
+      if (!plan.has(key)) plan.set(key, { name, dashed, members: [], selfridges: '' });
+      plan.get(key).members.push(p);
+    });
+
+    // Drop trailing weights where that keeps every name distinct, counting
+    // products that already exist too.
+    const stripped = g => g.dashed ? g.name : g.name.replace(WEIGHT_RE, '').trim();
+    const counts = {};
+    groups.forEach(g => { const k = searchNorm(g['Product name']); counts[k] = (counts[k] || 0) + 1; });
+    plan.forEach(g => { const k = searchNorm(stripped(g)); counts[k] = (counts[k] || 0) + 1; });
+    const existingNames = new Set(groups.map(g => searchNorm(g['Product name'])));
+    plan.forEach(g => {
+      const k = searchNorm(stripped(g));
+      if (counts[k] === 1 || (counts[k] === 2 && existingNames.has(k) && searchNorm(g.name) === k)) g.name = stripped(g);
+    });
+
+    candidates.filter(p => SELFRIDGES_RE.test(p['Product name'] || '')).forEach(p => {
+      const name = baseName(p).name;
+      const k = searchNorm(name.replace(WEIGHT_RE, '').trim());
+      const matches = [...plan.values()].filter(g => !g.selfridgesOnly && searchNorm(g.name.replace(WEIGHT_RE, '').trim()) === k);
+      if (matches.length === 1 && !matches[0].selfridges) {
+        matches[0].selfridges = p['Product code'];
+        matches[0].members.push(p);
+      } else {
+        plan.set('selfridges:' + p['Product code'], { name: name.replace(WEIGHT_RE, '').trim() || name, dashed: false, members: [p], selfridges: p['Product code'], selfridgesOnly: true });
+      }
+    });
+
+    const existingByName = Object.fromEntries(groups.map(g => [searchNorm(g['Product name']), g]));
+    return [...plan.values()].map(g => {
+      const wholesale = g.members.filter(p => p['Product code'] !== g.selfridges);
+      const whole = wholesale.find(p => !p['Cut from (code)'] && /—\s*whole/i.test(p['Product name']))
+        || wholesale.find(p => !p['Cut from (code)']) || g.members[0];
+      const first = key => [whole, ...g.members].map(p => (p[key] || '').toString().trim()).find(Boolean) || '';
+      const existing = existingByName[searchNorm(g.name)];
+      return {
+        name: g.name, existingId: existing ? existing.ID : '', members: g.members, wholesale, selfridges: g.selfridges,
+        category: whole.Category || '',
+        nominal: whole['Pricing basis'] === 'Per kg' && whole.Category === 'Cheese' ? (whole['Nominal weight (kg)'] || '') : '',
+        photo: first('Photo URL'), techSheet: first('Tech sheet URL'), training: first('Training notes')
+      };
+    }).sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  }
+
+  let grouping = null; // { plan, groupRows, fillCategory: [{ rowNumber, category }] }
+
+  async function openGrouping() {
+    const dlg = document.getElementById('groupDialog');
+    const body = document.getElementById('groupBody');
+    const applyBtn = document.getElementById('groupApplyBtn');
+    body.innerHTML = '<div class="sp-loading">Reading SKUs…</div>';
+    applyBtn.disabled = true;
+    dlg.showModal();
+    try {
+      const groupRows = await sheetsGet(getStoredConfig().spreadsheetId, 'ProductGroups!A:Z').catch(() => null);
+      if (!groupRows || !groupRows.length || !skuIndex.groupCol || !skuIndex.all.length) {
+        body.innerHTML = `<div class="note">Re-run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> first — it adds the ProductGroups tab and the Group ID column on Products.</div>`;
+        return;
+      }
+      const [head, ...rest] = groupRows;
+      const groups = rest.map((r, i) => ({ rowNumber: i + 2, ...Object.fromEntries(head.map((h, j) => [h, r[j] ?? ''])) }));
+      const plan = planGroups(skuIndex.all, groups);
+      const catIdx = head.indexOf('Category');
+      const fillCategory = catIdx < 0 ? [] : groups
+        .filter(g => !g.Category && (skuIndex.byGroup[g.ID] || []).some(p => p.Category))
+        .map(g => ({ rowNumber: g.rowNumber, category: skuIndex.byGroup[g.ID].find(p => p.Category).Category, col: colLetter(catIdx + 1) }));
+      grouping = { plan, groupRows, fillCategory };
+      const newCount = plan.filter(g => !g.existingId).length;
+      const linkCount = plan.reduce((n, g) => n + g.members.length, 0);
+      if (!plan.length && !fillCategory.length) {
+        body.innerHTML = '<div class="note ok">Every SKU is already in a product — nothing to do.</div>';
+        return;
+      }
+      body.innerHTML = `
+        <p style="margin:0 0 12px; font-size:13.5px;">This creates <strong>${newCount} product(s)</strong>${plan.length > newCount ? ` (and adds to ${plan.length - newCount} existing)` : ''} from <strong>${linkCount} SKU(s)</strong>${fillCategory.length ? `, and fills in the category on ${fillCategory.length} existing product(s)` : ''}. Nothing is deleted or renamed; SKU photos are copied onto the product. Check the grouping, then Create.</p>
+        ${plan.length ? `<div class="scroll" style="max-height:52vh; overflow:auto;">
+          <table><thead><tr><th>Product</th><th>Category</th><th>Wholesale SKUs</th><th>Selfridges</th></tr></thead>
+          <tbody>${plan.map(g => `
+            <tr>
+              <td>${productCell({ 'Photo URL': g.photo }, `<strong>${escapeHtml(g.name)}</strong>${g.existingId ? ` <span class="tag t-amb">exists · ${escapeHtml(g.existingId)}</span>` : ''}`, 'xs')}</td>
+              <td>${escapeHtml(g.category)}</td>
+              <td class="code" style="white-space:normal;">${g.wholesale.map(p => escapeHtml(p['Product code'])).join(', ') || '—'}</td>
+              <td class="code">${escapeHtml(g.selfridges) || '—'}</td>
+            </tr>`).join('')}</tbody></table>
+        </div>` : ''}`;
+      applyBtn.textContent = newCount ? `Create ${newCount} product(s) from ${linkCount} SKU(s)`
+        : plan.length ? `Add ${linkCount} SKU(s) to existing products` : 'Fill in categories';
+      applyBtn.disabled = false;
+    } catch (err) {
+      body.innerHTML = `<div class="note">Couldn't read the sheet: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function applyGrouping() {
+    const { plan, groupRows, fillCategory } = grouping;
+    const cfg = getStoredConfig();
+    const applyBtn = document.getElementById('groupApplyBtn');
+    applyBtn.disabled = true;
+    try {
+      let base = groupRows;
+      const newRows = [];
+      plan.forEach(g => {
+        if (g.existingId) { g.id = g.existingId; return; }
+        g.id = nextId(base, 'PG');
+        base = base.concat([[g.id]]);
+        newRows.push([g.id, g.name, '', g.selfridges, g.nominal, g.photo, g.techSheet, g.training, '', 'Yes', g.category]);
+      });
+      if (newRows.length) await sheetsAppendRows(cfg.spreadsheetId, 'ProductGroups!A:K', newRows);
+      const writes = plan.flatMap(g => g.members.map(p => ({ range: `Products!${skuIndex.groupCol}${p.rowNumber}`, values: [[g.id]] })))
+        .concat(fillCategory.map(f => ({ range: `ProductGroups!${f.col}${f.rowNumber}`, values: [[f.category]] })));
+      for (let i = 0; i < writes.length; i += 200) await sheetsBatchUpdateValues(cfg.spreadsheetId, writes.slice(i, i + 200));
+      document.getElementById('groupDialog').close();
+      showToast(`Created ${newRows.length} product(s)${fillCategory.length ? `, filled ${fillCategory.length} categories` : ''}`);
+      (await groupsTable).reload();
+      (await skusTable).reload();
+    } catch (err) {
+      applyBtn.disabled = false;
+      document.getElementById('groupBody').insertAdjacentHTML('afterbegin', `<div class="note">Error: ${escapeHtml(err.message)} — it's safe to try again; anything already written is reused.</div>`);
+    }
+  }
+
   window.addEventListener('load', () => {
     if (!requireAuth()) return;
 
+    // The SKUs view: one row per SKU (the Products tab).
     const products = initCrudTable({
       mount: '#productsMount',
-      title: 'Products',
+      title: 'SKUs',
       tab: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Cheese ID'],
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID'],
       autoId: null,
       fields: [
         { key: 'Product code', label: 'Product code', type: 'text', required: true, placeholder: 'e.g. CCS050' },
@@ -208,20 +607,19 @@
           key: 'Training notes', label: 'Training sheet', type: 'textarea', section: 'Docs & training',
           placeholder: 'Everything staff should know handling this product — cutting, storage, allergens, talking points...'
         },
-        { key: 'Cheese ID', label: 'Cheese', type: 'text', placeholder: 'e.g. CHZ012 — set from the Cheeses page' }
+        { key: 'Group ID', label: 'Product', type: 'text', placeholder: "e.g. PG012 — usually set from the product's SKUs tab" }
       ],
-      // So a portion with no photo can show the whole it's cut from.
-      onLoad: (rows, get) => registerProducts(rows.map(r => ({
-        'Product code': get(r.values, 'Product code'), 'Photo URL': get(r.values, 'Photo URL'), 'Cheese ID': get(r.values, 'Cheese ID')
-      }))),
+      // Feeds the product cards (their SKUs, stock and photos) — and so
+      // re-runs after every SKU save.
+      onLoad: (rows, get, openEdit) => { skuOpenEdit = openEdit; indexSkus(rows, get); },
       inlineEdit: true,
       catalogue: {
         layout: 'cards',
         stock: stockFigure,
         tabsBy: 'Category',
         groupBy: 'Category',
-        // The cheese's photo when it has one (one upload covers all its SKUs).
-        photo: (pick) => productPhoto({ 'Photo URL': pick('Photo URL'), 'Cheese ID': pick('Cheese ID'), 'Cut from (code)': pick('Cut from (code)') }),
+        // The product's photo when it has one (one upload covers all its SKUs).
+        photo: (pick) => productPhoto({ 'Photo URL': pick('Photo URL'), 'Group ID': pick('Group ID'), 'Cut from (code)': pick('Cut from (code)') }),
         name: 'Product name',
         tag: (pick) => ({ text: pick('Storage'), on: pick('Storage') === 'Chilled' }),
         sub: (pick) => [pick('Producer'), pick('Default supplier')].filter(Boolean).join(' · '),
@@ -255,15 +653,22 @@
           const producer = pick('Producer'), supplier = pick('Default supplier');
           return producer && supplier ? `${producer} · via ${supplier}` : (producer || supplier || '');
         },
-        emptyTitle: 'Nothing in the catalogue yet',
-        emptySub: 'Add your first product, or use Bulk photos once your SKUs are in.'
+        emptyTitle: 'No SKUs yet',
+        emptySub: 'Add your first SKU, or use Bulk photos once your SKUs are in.'
       }
     });
+    skusTable = products;
+    groupsTable = initGroupsTable();
 
-    loadStock().then(() => products.then(p => p.rerender()));
-    loadCheeses(getStoredConfig().spreadsheetId).then(cheeses => { registerCheeses(cheeses); products.then(p => p.rerender()); });
+    loadStock().then(() => { products.then(p => p.rerender()); groupsTable.then(g => g.rerender()); });
 
-    document.getElementById('addProductBtn').addEventListener('click', () => products.then(p => p.openAdd()));
+    document.getElementById('addProductBtn').addEventListener('click', () => groupsTable.then(g => g.openAdd()));
+    document.getElementById('addSkuBtn').addEventListener('click', () => products.then(p => p.openAdd()));
+    document.getElementById('groupBtn').addEventListener('click', openGrouping);
+    document.getElementById('groupApplyBtn').addEventListener('click', applyGrouping);
+    document.querySelectorAll('#groupDialog [data-close]').forEach(b => b.addEventListener('click', () => document.getElementById('groupDialog').close()));
+    document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+    setView(readView());
 
     initBulkPhotosUpload(products);
   });

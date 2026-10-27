@@ -518,15 +518,25 @@ dialog .session-banner{top:12px}
 
 /* Picking/cutting/packing lists get printed and taken to the warehouse
    floor — strip the app chrome down to just the list content. */
-/* Cheeses page: a cheese's SKUs by channel (cheeses.html) */
+/* Products page: Products / SKUs view switch */
+.seg{display:inline-flex;background:var(--white);border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg-btn{border:0;background:none;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:500;color:var(--steel);cursor:pointer}
+.seg-btn.on{background:var(--brand);color:#fff}
+.view-off{height:0;overflow:hidden;visibility:hidden}
+.view-off dialog{visibility:visible}
+
+/* A product's SKUs by channel (products.html) */
 .cz-channel{margin-bottom:18px}
 .cz-channel h4{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin:0 0 8px;display:flex;align-items:center;gap:8px}
 .cz-sku{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;margin-bottom:6px}
+.cz-sku[data-open-sku]{cursor:pointer}
+.cz-sku[data-open-sku]:hover{border-color:#CFCABE}
 .cz-sku-t{flex:1;min-width:0}
 .cz-sku-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cz-empty{font-size:13px;color:var(--mist);padding:6px 0}
 .cz-link{display:flex;gap:8px;align-items:center;margin-top:8px}
 .cz-link select{flex:1;min-width:0}
+.cz-link{flex-wrap:wrap}
 
 /* Order/PO dialogs opened in place over another page (openInPlace in
    js/shell.js): the parent page shows the shade, the embedded page only

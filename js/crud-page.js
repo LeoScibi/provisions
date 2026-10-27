@@ -103,6 +103,9 @@
 //                             // a dynamic subtitle with a live SKU count.
 // }
 //
+// The returned handle (a promise) offers openAdd(prefill?), openEdit(rowNumber),
+// reload() and rerender().
+//
 // onLoad's third argument, openEdit(rowNumber), opens that row's add/edit
 // dialog — e.g. a linked page can deep-link in via a `?open=<ID>` query
 // param: `onLoad: (rows, get, openEdit) => { const id = new
@@ -1063,7 +1066,9 @@ async function initCrudTable(config) {
     if (subEl) subEl.textContent = rowValues && catalogue.detailSub ? catalogue.detailSub(pick) : '';
   }
 
-  async function openAddDialog() {
+  // `prefill` ({ key: value }) seeds plain inputs in the empty form — e.g.
+  // a new SKU opened from its product already carrying that product's ID.
+  async function openAddDialog(prefill = {}) {
     editing = null;
     root.querySelector(`#${tab}_dlgTitle`).textContent = `Add ${singular}`;
     root.querySelector(`#${tab}_submitBtn`).textContent = `Add ${singular}`;
@@ -1074,6 +1079,11 @@ async function initCrudTable(config) {
     }
     setDlgStatus('');
     resetFieldValues();
+    Object.entries(prefill).forEach(([key, value]) => {
+      const f = fields.find(x => x.key === key);
+      const el = f && form.querySelector(`#${fid(f)}`);
+      if (el) el.value = value;
+    });
     const extraEl = root.querySelector(`#${tab}_dlgExtra`);
     if (extraEl) {
       extraEl.innerHTML = '';
@@ -1178,6 +1188,7 @@ async function initCrudTable(config) {
   // data a page fetches separately, like the Products cards' stock figures.
   return {
     openAdd: openAddDialog,
+    openEdit: handleEdit,
     reload: loadRows,
     rerender: () => { if (catalogue) renderCatalogueToolbar(); applyViewAndRender(); }
   };

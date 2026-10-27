@@ -65,14 +65,17 @@ models, sheet schemas, or conventions between the two.
 - **Products** — item master, one row per SKU keyed by `Product code`
   (natural key, not an auto-id). Mirrors the Xero-linked schema: cost/landed
   cost, cut-to-order fields, Xero item/account codes.
-- **Cheeses** — one row per cheese (`cheeses.html`), the thing a photo,
-  spec sheet and training notes belong to. Its SKUs are Products rows whose
-  `Cheese ID` points at it: each is a Wholesale SKU (the whole wheel plus any
-  portions), except the codes in the cheese's `Shop SKU` / `Selfridges SKU`,
-  which fill those two channels — one SKU each, either may be empty. A
-  cheese's photo wins over its products' own everywhere (`productPhoto()` in
-  `js/product-ui.js`). The page's "Create cheeses from products" button is
-  the re-runnable migration that groups existing products into cheeses.
+- **ProductGroups** — one row per *product* (a card on `products.html`),
+  the thing a photo, spec sheet and training notes belong to; the
+  **Products** tab is really its SKUs. A SKU belongs to a product via
+  Products.`Group ID`: each linked SKU is a Wholesale SKU (e.g. a whole wheel
+  plus its portions), except the codes in the product's `Shop SKU` /
+  `Selfridges SKU`, which fill those two channels — one SKU each, either may
+  be empty. Different sizes (210g / 3kg) are separate products. A product's
+  photo wins over its SKUs' own everywhere (`productPhoto()` in
+  `js/product-ui.js`). "Group SKUs into products" on the Products page is the
+  re-runnable grouping. Was the cheese-only "Cheeses" tab / `Cheese ID`
+  column; Setup renames those in place (`TAB_RENAMES` / `HEADER_RENAMES`).
 - **Suppliers**, **Customers**, **TransportCompanies** — reference lists.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
@@ -120,8 +123,7 @@ existing column and misaligns every row's data under the new header.
 ```
 index.html          Dashboard: config, sign-in, nav
 setup.html            Auto-creates required tabs + headers — run first on a new sheet
-products.html           Item master
-cheeses.html             Cheeses: photo/spec once per cheese, its SKUs by channel
+products.html           Products (one card each, SKUs by channel inside) / SKUs views
 suppliers.html            Supplier list
 customers.html              Customer list
 transport.html               Hauliers bringing goods in, with contacts

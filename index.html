@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=31">
+<link rel="stylesheet" href="css/style.css?v=32">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -85,9 +85,9 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=4"></script>
+<script src="js/shell.js?v=5"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
   let tokenClient = null;
@@ -196,7 +196,7 @@
     card.style.display = 'block';
     setStatus('');
     try {
-      const cheesesP = loadCheeses(cfg.spreadsheetId); // in parallel with the reads below
+      const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
       const [productRows, deliveryRows, allocationRows, poRows, polRows, orderRows, lineRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
@@ -211,7 +211,7 @@
       const productByCode = {};
       products.forEach(p => { productByCode[p['Product code']] = p; });
       registerProducts(products);
-      registerCheeses(await cheesesP);
+      registerProductGroups(await groupsP);
 
       // Batches currently in stock — Deliveries minus Allocations per
       // product+lot, same computation as the Stock page.

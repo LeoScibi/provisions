@@ -4,10 +4,10 @@
 // (Products."Photo URL", a public Drive thumbnail link — see js/drive.js)
 // next to its name wherever a product is listed. A product with no photo,
 // or one whose image fails to load, gets a plain grey square so rows still
-// line up. The photo comes from the product's cheese first (Cheeses tab,
-// via Products."Cheese ID" — so one upload covers every SKU of a cheese),
-// then the product's own, then the whole it's cut from; pages call
-// registerProducts() and registerCheeses() after loading those tabs.
+// line up. The photo comes from the SKU's product first (ProductGroups tab,
+// via Products."Group ID" — so one upload covers every SKU of a product),
+// then the SKU's own, then the whole it's cut from; pages call
+// registerProducts() and registerProductGroups() after loading those tabs.
 //
 // attachOrderHoverCard(container, selector, build) shows a small card with
 // an order's details and line items (with thumbnails) when the mouse rests
@@ -17,33 +17,33 @@
 // there — tapping the row still opens the order as before.
 
 let productByCodeForPhoto = {};
-let cheesePhotoById = {};
+let groupPhotoById = {};
 
 function registerProducts(products) {
   productByCodeForPhoto = {};
   products.forEach(p => { productByCodeForPhoto[p['Product code']] = p; });
 }
 
-function registerCheeses(cheeses) {
-  cheesePhotoById = {};
-  cheeses.forEach(c => {
-    const url = (c['Photo URL'] || '').toString().trim();
-    if (url) cheesePhotoById[c.ID] = url;
+function registerProductGroups(groups) {
+  groupPhotoById = {};
+  groups.forEach(g => {
+    const url = (g['Photo URL'] || '').toString().trim();
+    if (url) groupPhotoById[g.ID] = url;
   });
 }
 
 function productPhoto(prod, depth = 0) {
   if (!prod) return '';
-  const own = cheesePhotoById[prod['Cheese ID']] || (prod['Photo URL'] || '').toString().trim();
+  const own = groupPhotoById[prod['Group ID']] || (prod['Photo URL'] || '').toString().trim();
   if (own || depth > 2) return own;
   return productPhoto(productByCodeForPhoto[prod['Cut from (code)']], depth + 1);
 }
 
-// The Cheeses tab as header-keyed objects, or [] if it doesn't exist yet
-// (Setup not re-run) — photos then just fall back to the product's own.
-async function loadCheeses(spreadsheetId) {
+// The ProductGroups tab as header-keyed objects, or [] if it doesn't exist
+// yet (Setup not re-run) — photos then just fall back to the SKU's own.
+async function loadProductGroups(spreadsheetId) {
   try {
-    const [head = [], ...rows] = await sheetsGet(spreadsheetId, 'Cheeses!A:Z');
+    const [head = [], ...rows] = await sheetsGet(spreadsheetId, 'ProductGroups!A:Z');
     return rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
   } catch (err) {
     return [];

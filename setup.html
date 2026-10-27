@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=31">
+<link rel="stylesheet" href="css/style.css?v=32">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -34,7 +34,7 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=4"></script>
+<script src="js/shell.js?v=5"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -118,7 +118,7 @@
   const REQUIRED_TABS = [
     {
       title: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Cheese ID']
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID']
     },
     {
       title: 'Suppliers',
@@ -168,13 +168,16 @@
       headers: ['ID','SUPPLIER','PRODUCT CODE','SUPPLIER PRODUCT CODE','COST PRICE £','NOTES','UPDATED']
     },
     {
-      // One row per cheese — the thing a photo, spec sheet and training notes
-      // belong to (cheeses.html). Its SKUs: every Products row whose Cheese ID
-      // points here is a Wholesale SKU (the whole wheel plus any portions),
-      // except the codes in SHOP SKU / SELFRIDGES SKU, which fill those two
-      // channels — one SKU each, either may be empty.
-      title: 'Cheeses',
-      headers: ['ID','Cheese name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active']
+      // One row per product — the thing a photo, spec sheet and training
+      // notes belong to, shown as a card on products.html. (The Products tab
+      // above is really its SKUs.) Every Products row whose Group ID points
+      // here is a Wholesale SKU (e.g. a whole wheel plus its portions),
+      // except the codes in Shop SKU / Selfridges SKU, which fill those two
+      // channels — one SKU each, either may be empty. Was "Cheeses" (with
+      // Products."Cheese ID") before it covered every category; Setup
+      // renames the old tab and columns in place (TAB_RENAMES / HEADER_RENAMES).
+      title: 'ProductGroups',
+      headers: ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category']
     },
     {
       // Hauliers that bring goods in to Provisions, with contact details
@@ -183,6 +186,12 @@
       headers: ['Company name','Suppliers they bring','Contact name','Phone','Email','Booking / tracking link','Account number','Delivery days','Notes','Active']
     }
   ];
+
+  // Renamed since launch: applied once, before the checks below, and only
+  // while the old name is still there — so a re-run does nothing and no
+  // data moves (a renamed tab keeps its rows, a renamed column its cells).
+  const TAB_RENAMES = [['Cheeses', 'ProductGroups']];
+  const HEADER_RENAMES = [['ProductGroups', 'Cheese name', 'Product name'], ['Products', 'Cheese ID', 'Group ID']];
 
   const status = document.getElementById('status');
   let token = null;
@@ -258,6 +267,27 @@
       existingTabs = await sheetsGetTabs(cfg.spreadsheetId, token);
     } catch (err) {
       setStatus('Error reading spreadsheet: ' + err.message, 'error');
+      return;
+    }
+
+    try {
+      for (const [from, to] of TAB_RENAMES) {
+        const old = existingTabs.find(t => t.title === from);
+        if (!old || existingTabs.some(t => t.title === to)) continue;
+        setStatus(`Renaming tab ${from} → ${to}...`);
+        await sheetsBatchUpdate(cfg.spreadsheetId, [{ updateSheetProperties: { properties: { sheetId: old.sheetId, title: to }, fields: 'title' } }], token);
+        old.title = to;
+      }
+      for (const [tabTitle, from, to] of HEADER_RENAMES) {
+        if (!existingTabs.some(t => t.title === tabTitle)) continue;
+        const [head = []] = await sheetsGet(cfg.spreadsheetId, `${tabTitle}!1:1`, token);
+        const idx = head.indexOf(from);
+        if (idx < 0 || head.includes(to)) continue;
+        const cell = `${tabTitle}!${colLetterLocal(idx + 1)}1`;
+        await sheetsUpdateRange(cfg.spreadsheetId, cell, [[to]], token);
+      }
+    } catch (err) {
+      setStatus('Error renaming: ' + err.message, 'error');
       return;
     }
 
