@@ -80,6 +80,17 @@ async function sheetsUpdateRange(spreadsheetId, range, values, token, valueInput
   return sheetsHandle(res);
 }
 
+// Writes several ranges in one request, e.g. data = [{ range: 'Orders!H2', values: [[1]] }, ...].
+async function sheetsBatchUpdateValues(spreadsheetId, data, token, valueInputOption = 'RAW') {
+  const url = `${sheetsBaseUrl(spreadsheetId)}/values:batchUpdate`;
+  const res = await googleFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ valueInputOption, data })
+  });
+  return sheetsHandle(res);
+}
+
 // Returns [{ sheetId, title }] for every tab in the spreadsheet.
 async function sheetsGetTabs(spreadsheetId, token) {
   const url = `${sheetsBaseUrl(spreadsheetId)}?fields=sheets.properties(sheetId,title)`;

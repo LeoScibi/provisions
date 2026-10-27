@@ -81,6 +81,8 @@
   //                BY). Clicking an order afterwards opens the same page's
   //                view dialog, which is also where STATUS is progressed
   //                and where stock gets allocated per line (see next).
+  //                DROP ORDER is the London truck position (1 = first
+  //                drop), set by dragging packing slips on lists.html.
   //   Allocations — links an order line to a specific delivered batch/lot
   //                and quantity. This is the stock-OUT event, done from
   //                orders.html's order-view dialog: each line shows its
@@ -138,7 +140,7 @@
     },
     {
       title: 'Orders',
-      headers: ['ID','DATE','CUSTOMER','DELIVERY DATE','STATUS','NOTES','PLACED BY']
+      headers: ['ID','DATE','CUSTOMER','DELIVERY DATE','STATUS','NOTES','PLACED BY','DROP ORDER']
     },
     {
       title: 'OrderLines',

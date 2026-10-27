@@ -514,8 +514,29 @@ dialog .session-banner{top:12px}
 
 /* Picking/cutting/packing lists get printed and taken to the warehouse
    floor — strip the app chrome down to just the list content. */
+/* lists.html — week picker, cutting groups, packing slips, truck order */
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.week-nav{display:inline-flex;align-items:center;gap:6px;margin-right:8px}
+.week-label{font-weight:600;font-size:14px;color:var(--ink);min-width:150px;text-align:center}
+.list-section{margin-bottom:36px}
+.list-h{font-size:18px;margin-bottom:14px}
+.zone-h{font-size:14px;font-weight:600;margin:18px 0 10px;color:var(--ink)}
+.zone-h .muted{font-weight:400;font-size:13px}
+.slip-meta{padding:10px 20px;font-size:13px;color:var(--steel);display:flex;flex-direction:column;gap:4px;border-bottom:1px solid var(--hair)}
+.slip-notes{color:var(--warn);font-weight:500}
+.slip[draggable="true"]{cursor:grab}
+.slip.dragging{opacity:.45}
+.drag-handle{color:var(--mist);letter-spacing:-2px;font-size:15px;cursor:grab;user-select:none}
+.drop-no{font-family:'Roboto Mono',monospace;font-size:12px;font-weight:700;background:var(--brand-soft);color:var(--brand-deep);padding:3px 9px;border-radius:999px}
+.tick-col{width:28px;padding-right:0}
+.tick-box{display:none;width:14px;height:14px;border:1.5px solid #000;border-radius:3px}
+
 .print-only{display:none}
 @media print{
+  body[data-print="cut"] #packSection,body[data-print="pack"] #cutSection{display:none}
+  .tick-box{display:inline-block}
+  .slip .panel-h,.cut-group .panel-h{padding:8px 12px}
+  .slip-meta{padding:6px 12px;color:#000}
   .topbar,.no-print,.page-loader,.toasts,.session-banner{display:none!important}
   main{max-width:none;padding:0}
   body{background:#fff}
