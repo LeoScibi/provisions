@@ -573,6 +573,31 @@ dialog .session-banner{top:12px}
 .slip-line .sl-qty{font-family:'Roboto Mono',monospace;font-size:12px;white-space:nowrap;text-align:right}
 .slip-line .sl-from{font-size:12px;white-space:nowrap}
 .slip-h .btn.sm{min-height:26px;padding:2px 9px}
+.slip-boxes{display:inline-flex;align-items:center;gap:6px;margin:0;font-family:Archivo,sans-serif;font-size:12px;font-weight:500;color:var(--steel);text-transform:none;letter-spacing:normal}
+.slip-boxes input{width:56px;padding:3px 8px;font-size:13px;min-height:0;text-align:center}
+
+/* Delivery notes and box labels: built into #printOut only when printed. */
+#printOut{display:none}
+.dn{font-size:12pt;color:#000}
+.dn-top{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:16px}
+.dn-logo{height:56px}
+.dn-title{font-size:22pt;font-weight:700}
+.dn-meta{display:grid;grid-template-columns:2fr 1fr;gap:24px;margin-bottom:18px}
+.dn-k{font-size:8.5pt;text-transform:uppercase;letter-spacing:.08em;color:#555;margin-top:6px}
+.dn-v{font-size:12pt;line-height:1.35}
+.dn-table{width:100%;border-collapse:collapse}
+.dn-table th{text-align:left;font-size:9pt;text-transform:uppercase;letter-spacing:.06em;border-bottom:1.5px solid #000;padding:6px 6px}
+.dn-table td{padding:7px 6px;border-bottom:1px solid #bbb;vertical-align:top}
+.dn-table .num{text-align:right;white-space:nowrap}
+.dn-notes{margin-top:14px;font-size:11pt}
+.dn-sign{display:grid;grid-template-columns:2fr 2fr 1fr;gap:24px;margin-top:48px}
+.dn-sign div{border-top:1px solid #000;padding-top:4px;font-size:9pt;color:#555}
+.bl-sheet{display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:132mm;gap:6mm}
+.bl{border:1.5px dashed #000;border-radius:4mm;padding:8mm;display:flex;flex-direction:column;break-inside:avoid;color:#000}
+.bl-box{font-size:26pt;font-weight:700;margin-bottom:6mm}
+.bl-cust{font-size:20pt;font-weight:700;line-height:1.15;margin-bottom:4mm}
+.bl-addr{font-size:14pt;line-height:1.35;flex:1}
+.bl-foot{display:flex;justify-content:space-between;font-size:11pt;border-top:1px solid #000;padding-top:3mm}
 @media (max-width:640px){.slip-line{grid-template-columns:auto 28px minmax(0,1fr) auto}.slip-line .sl-from{grid-column:3 / 5}}
 .slip[draggable="true"]{cursor:grab}
 .slip.dragging{opacity:.45}
@@ -584,6 +609,11 @@ dialog .session-banner{top:12px}
 .print-only{display:none}
 @media print{
   body[data-print="cut"] #packSection,body[data-print="pack"] #cutSection{display:none}
+  body[data-print="notes"] #listsOut,body[data-print="labels"] #listsOut{display:none}
+  body[data-print="notes"] #printOut,body[data-print="labels"] #printOut{display:block}
+  .dn{break-after:page}
+  .dn:last-child{break-after:auto}
+  @page{margin:12mm}
   .tick-box{display:inline-block}
   .slip-line .tick-box{width:14px;height:14px;border:1.5px solid #000;margin-left:0}
   .cut-group .panel-h{padding:8px 12px}

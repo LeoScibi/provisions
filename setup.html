@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=29">
+<link rel="stylesheet" href="css/style.css?v=30">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -34,7 +34,7 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=2"></script>
+<script src="js/shell.js?v=3"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -83,6 +83,8 @@
   //                and where stock gets allocated per line (see next).
   //                DROP ORDER is the London truck position (1 = first
   //                drop), set by dragging packing slips on lists.html.
+  //                BOXES is the packer's box count, typed on the same
+  //                slips; it sets how many box labels print.
   //   Allocations — links an order line to a specific delivered batch/lot
   //                and quantity. This is the stock-OUT event, done from
   //                orders.html's order-view dialog: each line shows its
@@ -140,7 +142,7 @@
     },
     {
       title: 'Orders',
-      headers: ['ID','DATE','CUSTOMER','DELIVERY DATE','STATUS','NOTES','PLACED BY','DROP ORDER']
+      headers: ['ID','DATE','CUSTOMER','DELIVERY DATE','STATUS','NOTES','PLACED BY','DROP ORDER','BOXES']
     },
     {
       title: 'OrderLines',
@@ -164,6 +166,12 @@
       // even without a row here (see js/supplier-products.js).
       title: 'SupplierProducts',
       headers: ['ID','SUPPLIER','PRODUCT CODE','SUPPLIER PRODUCT CODE','COST PRICE £','NOTES','UPDATED']
+    },
+    {
+      // Hauliers that bring goods in to Provisions, with contact details
+      // (transport.html), keyed by company name.
+      title: 'TransportCompanies',
+      headers: ['Company name','Suppliers they bring','Contact name','Phone','Email','Booking / tracking link','Account number','Delivery days','Notes','Active']
     }
   ];
 

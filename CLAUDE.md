@@ -65,7 +65,7 @@ models, sheet schemas, or conventions between the two.
 - **Products** — item master, one row per SKU keyed by `Product code`
   (natural key, not an auto-id). Mirrors the Xero-linked schema: cost/landed
   cost, cut-to-order fields, Xero item/account codes.
-- **Suppliers**, **Customers** — reference lists.
+- **Suppliers**, **Customers**, **TransportCompanies** — reference lists.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
   delivery date range. Status: Ordered → Delivered/Cancelled — delivery is
@@ -115,11 +115,13 @@ setup.html            Auto-creates required tabs + headers — run first on a ne
 products.html           Item master
 suppliers.html            Supplier list
 customers.html              Customer list
+transport.html               Hauliers bringing goods in, with contacts
 purchase-orders.html           Place/receive supplier orders
 stock.html                       Stock view
 stock-take.html                    Physical count vs. system quantity
 orders.html                          Place orders, allocate stock
-lists.html                             Picking/cutting/packing lists
+lists.html                             Cutting list, packing slips (truck order, box
+                                       counts), delivery notes, box labels
 ```
 
 ## Working here

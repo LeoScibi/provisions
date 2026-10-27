@@ -73,9 +73,9 @@ function enhanceSelect(selectEl) {
   }
 
   function renderList() {
-    const term = searchInput.value.trim().toLowerCase();
+    const term = searchNorm(searchInput.value.trim());
     const all = options();
-    filtered = term ? all.filter(o => o.text.toLowerCase().includes(term)) : all;
+    filtered = term ? all.filter(o => searchMatch(o.text, term)) : all;
     list.innerHTML = filtered.length
       ? filtered.map(o => `<button type="button" class="cbx-opt${o.value === selectEl.value ? ' cbx-selected' : ''}">${escapeHtml(o.text)}</button>`).join('')
       : `<div class="cbx-empty">No matches</div>`;

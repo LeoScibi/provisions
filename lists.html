@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=29">
+<link rel="stylesheet" href="css/style.css?v=30">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -31,18 +31,21 @@
       <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
       <button type="button" class="btn ghost sm" id="printCutBtn">Print cutting list</button>
       <button type="button" class="btn ghost sm" id="printPackBtn">Print packing slips</button>
+      <button type="button" class="btn ghost sm" id="printNotesBtn">Print delivery notes</button>
+      <button type="button" class="btn ghost sm" id="printLabelsBtn">Print box labels</button>
       <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:Archivo,sans-serif; font-size:13px; color:var(--steel); font-weight:400; letter-spacing:normal;">
         <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
       </label>
     </div>
     <div id="listsOut"></div>
+    <div id="printOut"></div>
     <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
   </div>
 </main>
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=4"></script>
-<script src="js/shell.js?v=2"></script>
-<script src="js/util.js?v=2"></script>
+<script src="js/shell.js?v=3"></script>
+<script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=2"></script>
 <script>
   let token = null;
@@ -152,16 +155,18 @@
       const customerByName = {};
       toObjects(customerRows).forEach(c => { customerByName[c['Customer name (as in Xero)']] = c; });
 
-      // DROP ORDER was appended to Orders after launch — until Setup has
-      // been re-run the column doesn't exist and drops can't be saved.
+      // DROP ORDER and BOXES were appended to Orders after launch — until
+      // Setup has been re-run those columns don't exist and can't be saved.
       const dropIdx = (orderRows[0] || []).indexOf('DROP ORDER');
+      const boxesIdx = (orderRows[0] || []).indexOf('BOXES');
 
       data = {
         orders: toObjects(orderRows).map((o, i) => ({ ...o, rowNumber: i + 2 })),
         lines: toObjects(lineRows),
         allocs: toObjects(allocRows),
         productByCode, deliveryByKey, customerByName,
-        dropCol: dropIdx >= 0 ? colLetter(dropIdx + 1) : null
+        dropCol: dropIdx >= 0 ? colLetter(dropIdx + 1) : null,
+        boxesCol: boxesIdx >= 0 ? colLetter(boxesIdx + 1) : null
       };
       renderLists();
     } catch (err) {
@@ -287,9 +292,7 @@
       return;
     }
 
-    const outside = inWeek.filter(o => zoneOf(o) === 'Out of London').sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER));
-    const london = sortByDrop(inWeek.filter(o => zoneOf(o) === 'London'));
-    const noZone = inWeek.filter(o => !['London', 'Out of London'].includes(zoneOf(o))).sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER));
+    const { outside, london, noZone } = packingGroups(inWeek);
 
     const cutGroups = buildCutGroups(inWeek);
     const shortCount = inWeek.reduce((n, o) => n + packLines(o).filter(l => l.short).length, 0);
@@ -350,6 +353,17 @@
     setStatus(`${inWeek.length} order(s) for delivery ${fmtWeekRange(weekRange(weekOffset).start, weekRange(weekOffset).end)}.`, 'ok');
   }
 
+  // The order slips are packed in: Out of London first (courier), then
+  // London in truck order, then anything with no zone. Delivery notes and
+  // box labels print in the same order.
+  function packingGroups(orders) {
+    return {
+      outside: orders.filter(o => zoneOf(o) === 'Out of London').sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER)),
+      london: sortByDrop(orders.filter(o => zoneOf(o) === 'London')),
+      noZone: orders.filter(o => !['London', 'Out of London'].includes(zoneOf(o))).sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER))
+    };
+  }
+
   function zoneTag(zone) {
     if (zone === 'London') return '<span class="tag t-chill">London</span>';
     if (zone === 'Out of London') return '<span class="tag t-ldo">Out of London</span>';
@@ -374,6 +388,10 @@
           <span class="muted" style="font-size:12px;">${escapeHtml(fmtDateShort(order['DELIVERY DATE']))}</span>
           ${order.STATUS === 'Dispatched' ? '<span class="tag t-ok">Dispatched</span>' : ''}
           <span class="slip-addr" title="${escapeHtml(cust['Delivery address'] || '')}">${escapeHtml(cust['Delivery address'] || 'No delivery address on file')}</span>
+          <label class="slip-boxes no-print" title="Number of boxes — sets how many box labels print">Boxes
+            <input type="number" min="0" step="1" inputmode="numeric" data-boxes="${escapeHtml(order.ID)}" value="${escapeHtml(order.BOXES || '')}" placeholder="–">
+          </label>
+          ${order.BOXES ? `<span class="print-only muted">${escapeHtml(order.BOXES)} box(es)</span>` : ''}
           ${drop ? `<span class="no-print" style="display:inline-flex; gap:4px;">
             <button type="button" class="btn ghost sm" data-move="-1" aria-label="Move up"${drop === 1 ? ' disabled' : ''}>&uarr;</button>
             <button type="button" class="btn ghost sm" data-move="1" aria-label="Move down">&darr;</button>
@@ -466,9 +484,113 @@
     }
   }
 
+  // ---- box count: typed by the packer once an order is packed ----
+
+  async function saveBoxes(input) {
+    const order = data.orders.find(o => o.ID === input.dataset.boxes);
+    if (!order) return;
+    const n = input.value === '' ? '' : Math.max(0, Math.round(parseFloat(input.value) || 0));
+    input.value = n;
+    if (String(order.BOXES || '') === String(n)) return;
+    if (!data.boxesCol) {
+      showToast('Re-run Setup to add the BOXES column before box counts can be saved.', 'error');
+      return;
+    }
+    const prev = order.BOXES;
+    order.BOXES = String(n);
+    try {
+      await sheetsUpdateRange(getStoredConfig().spreadsheetId, `Orders!${data.boxesCol}${order.rowNumber}`, [[n]], token);
+      showToast(`${order.CUSTOMER}: ${n === '' ? 'box count cleared' : n + ' box(es)'}`);
+    } catch (err) {
+      order.BOXES = prev;
+      input.value = prev || '';
+      showToast('Couldn’t save the box count: ' + err.message, 'error');
+    }
+  }
+  document.getElementById('listsOut').addEventListener('change', e => {
+    if (e.target.matches('[data-boxes]')) saveBoxes(e.target);
+  });
+  // Typing in the box field shouldn't start dragging its slip.
+  document.getElementById('listsOut').addEventListener('mousedown', e => {
+    const slip = e.target.closest('.slip[draggable]');
+    if (slip && e.target.matches('input')) { slip.draggable = false; e.target.addEventListener('blur', () => { slip.draggable = true; }, { once: true }); }
+  });
+
+  // ---- delivery notes and box labels ----
+
+  function weekPackingOrder() {
+    const { outside, london, noZone } = packingGroups(weekOrders().inWeek);
+    return [...outside, ...london.map((o, i) => ({ ...o, _drop: i + 1 })), ...noZone];
+  }
+
+  // One A4 page per order: who it's for, what's in it (no prices), lots and
+  // best-befores for traceability, and a line for the customer to sign.
+  function deliveryNotesHtml(orders) {
+    return orders.map(o => {
+      const cust = data.customerByName[o.CUSTOMER] || {};
+      const lines = packLines(o);
+      return `
+        <div class="dn">
+          <div class="dn-top">
+            <img src="img/logo.png" alt="" class="dn-logo">
+            <div class="dn-title">Delivery note</div>
+          </div>
+          <div class="dn-meta">
+            <div><div class="dn-k">Deliver to</div><div class="dn-v"><strong>${escapeHtml(o.CUSTOMER)}</strong><br>${escapeHtml(cust['Delivery address'] || '')}</div></div>
+            <div><div class="dn-k">Order</div><div class="dn-v">${escapeHtml(o.ID)}</div>
+              <div class="dn-k">Delivery date</div><div class="dn-v">${escapeHtml(fmtDateShort(o['DELIVERY DATE']))}</div>
+              ${o.BOXES ? `<div class="dn-k">Boxes</div><div class="dn-v">${escapeHtml(o.BOXES)}</div>` : ''}
+              ${o._drop ? `<div class="dn-k">Drop</div><div class="dn-v">${o._drop}</div>` : ''}</div>
+          </div>
+          <table class="dn-table"><thead><tr><th>Product</th><th>Code</th><th class="num">Qty</th><th>Lot / best before</th></tr></thead>
+          <tbody>${lines.map(l => `
+            <tr>
+              <td>${escapeHtml(l.name)}</td>
+              <td>${escapeHtml(l.code)}</td>
+              <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
+              <td>${l.isCut ? 'Cut to order' : l.lots.map(x => `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
+            </tr>`).join('')}</tbody></table>
+          ${o.NOTES ? `<div class="dn-notes"><span class="dn-k">Notes</span> ${escapeHtml(o.NOTES)}</div>` : ''}
+          <div class="dn-sign">
+            <div>Received by</div><div>Signature</div><div>Date</div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // Four labels to an A4 sheet, one per box: "Box 2 of 3", the customer and
+  // address large enough to read across a van. An order with no box count
+  // gets a single label.
+  function boxLabelsHtml(orders) {
+    const labels = [];
+    orders.forEach(o => {
+      const cust = data.customerByName[o.CUSTOMER] || {};
+      const n = Math.max(1, parseInt(o.BOXES, 10) || 1);
+      for (let i = 1; i <= n; i++) {
+        labels.push(`
+          <div class="bl">
+            <div class="bl-box">Box ${i} of ${n}</div>
+            <div class="bl-cust">${escapeHtml(o.CUSTOMER)}</div>
+            <div class="bl-addr">${escapeHtml(cust['Delivery address'] || '')}</div>
+            <div class="bl-foot"><span>${escapeHtml(o.ID)} · ${escapeHtml(fmtDateShort(o['DELIVERY DATE']))}</span><span>${o._drop ? 'Drop ' + o._drop : escapeHtml(zoneOf(o) || '')}</span></div>
+          </div>`);
+      }
+    });
+    return `<div class="bl-sheet">${labels.join('')}</div>`;
+  }
+
   // ---- printing one list at a time ----
 
   function printOnly(which) {
+    if (which === 'notes' || which === 'labels') {
+      const orders = weekPackingOrder();
+      if (!orders.length) { showToast('No orders this week to print.', 'error'); return; }
+      if (which === 'labels') {
+        const missing = orders.filter(o => !(parseInt(o.BOXES, 10) > 0)).length;
+        if (missing) showToast(`${missing} order(s) have no box count — printing one label for each.`);
+      }
+      document.getElementById('printOut').innerHTML = which === 'notes' ? deliveryNotesHtml(orders) : boxLabelsHtml(orders);
+    }
     document.body.dataset.print = which;
     window.print();
   }
@@ -487,6 +609,8 @@
   document.getElementById('showAllToggle').addEventListener('change', () => { if (data) renderLists(); });
   document.getElementById('printCutBtn').addEventListener('click', () => printOnly('cut'));
   document.getElementById('printPackBtn').addEventListener('click', () => printOnly('pack'));
+  document.getElementById('printNotesBtn').addEventListener('click', () => printOnly('notes'));
+  document.getElementById('printLabelsBtn').addEventListener('click', () => printOnly('labels'));
   window.addEventListener('load', loadLists);
   // An order opened in place (js/shell.js) may have changed lines or
   // allocations — re-read so the lists match.

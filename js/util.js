@@ -44,3 +44,20 @@ function unitLabel(u) {
 function qtyUnit(qty, unit) {
   return `${qty}${unit === 'kg' ? 'kg' : ' ' + unitLabel(unit)}`;
 }
+
+// Search text normalised so accents and case don't matter: "comte" finds
+// "Comté", "felicien" finds "St Félicien" (and typing the accent still
+// works). NFD splits "é" into "e" plus a combining accent, which is then
+// dropped; letters NFD can't split (œ, æ, ø, ß) are spelled out.
+function searchNorm(s) {
+  return (s ?? '').toString().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/œ/g, 'oe').replace(/Œ/g, 'OE').replace(/æ/g, 'ae').replace(/Æ/g, 'AE')
+    .replace(/ø/g, 'o').replace(/Ø/g, 'O').replace(/ß/g, 'ss')
+    .toLowerCase();
+}
+
+// True when `text` contains `term`, ignoring accents and case. Pass a term
+// already run through searchNorm() when matching it against many texts.
+function searchMatch(text, normTerm) {
+  return searchNorm(text).includes(normTerm);
+}

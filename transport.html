@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Transport</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=30">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+
+<header class="topbar no-print" id="topbar"></header>
+
+<main>
+  <h2>Transport companies</h2>
+
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+
+  <div id="transportMount"></div>
+</main>
+
+<script src="js/config.js?v=4"></script>
+<script src="js/sheets.js?v=3"></script>
+<script src="js/shell.js?v=3"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/dialog-guard.js?v=1"></script>
+<script src="js/searchable-select.js?v=2"></script>
+<script src="js/crud-page.js?v=19"></script>
+<script>
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    const token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+
+  window.addEventListener('load', () => {
+    if (!requireAuth()) return;
+
+    // The hauliers that bring goods in to Provisions, with who to call —
+    // so anyone new can chase or rebook a delivery without asking around.
+    initCrudTable({
+      mount: '#transportMount',
+      title: 'Transport companies',
+      tab: 'TransportCompanies',
+      headers: ['Company name','Suppliers they bring','Contact name','Phone','Email','Booking / tracking link','Account number','Delivery days','Notes','Active'],
+      autoId: null,
+      fields: [
+        { key: 'Company name', label: 'Company name', type: 'text', required: true },
+        { key: 'Suppliers they bring', label: 'Suppliers they bring', type: 'text', placeholder: 'e.g. AMF/Odéon, Valsana' },
+        { key: 'Contact name', label: 'Contact name', type: 'text' },
+        { key: 'Phone', label: 'Phone', type: 'text' },
+        { key: 'Email', label: 'Email', type: 'text' },
+        { key: 'Booking / tracking link', label: 'Booking / tracking link', type: 'text', placeholder: 'https://...' },
+        { key: 'Account number', label: 'Account number', type: 'text' },
+        { key: 'Delivery days', label: 'Delivery days', type: 'text', placeholder: 'e.g. Tue and Fri mornings' },
+        { key: 'Notes', label: 'Notes', type: 'textarea' },
+        { key: 'Active', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No' }
+      ]
+    });
+  });
+</script>
+</body>
+</html>

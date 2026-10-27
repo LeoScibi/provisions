@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=29">
+<link rel="stylesheet" href="css/style.css?v=30">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <style>
   /* Stock take print sheet: black & white, landscape, two columns per page —
@@ -127,8 +127,8 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=2"></script>
-<script src="js/util.js?v=2"></script>
+<script src="js/shell.js?v=3"></script>
+<script src="js/util.js?v=3"></script>
 <script>
   let token = null;
   let stockTake = null;   // { rowNumber, obj } from StockTakes, or null if none in progress
@@ -515,13 +515,13 @@
   }
 
   function viewRows() {
-    const term = searchTerm.toLowerCase();
+    const term = searchNorm(searchTerm);
     return lines
       .map(l => ({ ...l, prod: productByCode[l.obj['PRODUCT CODE']] || {} }))
       .filter(l => !term
-        || l.obj['PRODUCT CODE'].toLowerCase().includes(term)
-        || (l.prod['Product name'] || '').toLowerCase().includes(term)
-        || (l.prod['Category'] || '').toLowerCase().includes(term))
+        || searchMatch(l.obj['PRODUCT CODE'], term)
+        || searchMatch(l.prod['Product name'], term)
+        || searchMatch(l.prod['Category'], term))
       .sort((a, b) => (a.prod['Category'] || '').localeCompare(b.prod['Category'] || '') || (a.prod['Product name'] || '').localeCompare(b.prod['Product name'] || ''));
   }
 

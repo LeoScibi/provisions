@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=29">
+<link rel="stylesheet" href="css/style.css?v=30">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -70,7 +70,7 @@
       <h2 style="font-size:22px; margin-bottom:16px;">Stock alerts</h2>
       <div class="two-col">
         <div class="panel" style="margin-bottom:0;">
-          <div class="panel-h"><h3>Expiring this week</h3><span class="code" id="expiringCount" style="margin-left:auto;"></span></div>
+          <div class="panel-h"><h3>Short-dated · under 3 weeks</h3><span class="code" id="expiringCount" style="margin-left:auto;"></span></div>
           <div id="expiringList"></div>
         </div>
         <div class="panel" style="margin-bottom:0;">
@@ -85,8 +85,8 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=2"></script>
-<script src="js/util.js?v=2"></script>
+<script src="js/shell.js?v=3"></script>
+<script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=2"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
@@ -184,6 +184,8 @@
   // ---- dashboard data + rendering ----
 
   let weekOffset = 0;
+  // The "Short-dated" panel lists lots with this many days or fewer left.
+  const SHORT_DATED_DAYS = 21;
   let dash = null; // cached load — week nav re-renders from this without refetching
 
   async function loadDashboard() {
@@ -349,14 +351,14 @@
     }).join('');
   }
 
-  // Live: expiring lots (always the real current week, independent of the
-  // week switcher above) and low stock (on-hand below each product's own
+  // Live: short-dated lots — anything in stock with under 3 weeks
+  // (SHORT_DATED_DAYS) left, or already past its best-before, soonest first,
+  // so sales and the shops can push it in time (independent of the week
+  // switcher above) — and low stock (on-hand below each product's own
   // Reorder threshold) — see Products for that field.
   function renderStockAlerts() {
-    const { start, end } = weekRange(0);
-    const startIso = isoDate(start), endIso = isoDate(end);
     const expiring = dash.batches
-      .filter(b => dateInRange(b.bbe, startIso, endIso))
+      .filter(b => b.bbe && daysUntil(b.bbe) <= SHORT_DATED_DAYS)
       .sort((a, b) => a.bbe.localeCompare(b.bbe));
 
     document.getElementById('expiringCount').textContent = expiring.length || '';
@@ -364,8 +366,8 @@
     expList.innerHTML = !expiring.length ? `
       <div class="empty-block">
         <div class="empty-icon">${ICON_CHECK_CIRCLE}</div>
-        <div class="empty-title">Nothing expiring this week</div>
-        <div class="empty-sub">Every lot in stock has more than a week of shelf life.</div>
+        <div class="empty-title">Nothing short-dated</div>
+        <div class="empty-sub">Every lot in stock has more than 3 weeks of shelf life.</div>
       </div>` : expiring.map(b => {
       const days = daysUntil(b.bbe);
       const prod = dash.productByCode[b.code];
@@ -373,8 +375,8 @@
       <div class="arow">
         ${productCell(prod, `
           <div class="arow-name">${escapeHtml(prod ? prod['Product name'] : b.code)}</div>
-          <div class="arow-sub code">Lot ${escapeHtml(b.batch)}</div>`)}
-        <span class="tag ${days <= 3 ? 't-crit' : 't-warn'}">${days}d left</span>
+          <div class="arow-sub code">Lot ${escapeHtml(b.batch)} · ${escapeHtml(qtyUnit(Math.round(b.remaining * 100) / 100, b.unit))} left</div>`)}
+        <span class="tag ${days <= 7 ? 't-crit' : days <= 14 ? 't-warn' : 't-yell'}">${days < 0 ? 'Past best-before' : days + 'd left'}</span>
       </div>`;
     }).join('');
 

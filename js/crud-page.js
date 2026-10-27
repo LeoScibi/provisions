@@ -727,7 +727,7 @@ async function initCrudTable(config) {
       if (stat && stat.filter) view = view.filter(d => stat.filter(rowPick(d.values)));
     }
     if (searchTerm) {
-      view = view.filter(d => d.values.some(v => (v ?? '').toString().toLowerCase().includes(searchTerm)));
+      view = view.filter(d => d.values.some(v => searchMatch(v, searchTerm)));
     }
     if (catalogue) { renderCatalogueGroups(view); return; }
     if (sortColIdx !== null) {
@@ -1022,7 +1022,7 @@ async function initCrudTable(config) {
   }
 
   searchInput.addEventListener('input', () => {
-    searchTerm = searchInput.value.trim().toLowerCase();
+    searchTerm = searchNorm(searchInput.value.trim());
     applyViewAndRender();
   });
 

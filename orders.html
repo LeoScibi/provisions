@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=29">
+<link rel="stylesheet" href="css/style.css?v=30">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -44,12 +44,12 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=2"></script>
-<script src="js/util.js?v=2"></script>
+<script src="js/shell.js?v=3"></script>
+<script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=2"></script>
 <script src="js/product-ui.js?v=2"></script>
 <script src="js/dialog-guard.js?v=1"></script>
-<script src="js/searchable-select.js?v=1"></script>
+<script src="js/searchable-select.js?v=2"></script>
 <script>
   const ORDER_STATUSES = ['New', 'Allocated', 'Picked', 'Cut', 'Packed', 'Dispatched'];
 
@@ -354,10 +354,10 @@
       renderOrderSummary();
       return;
     }
-    const term = (form.querySelector(`#${searchId}`).value || '').trim().toLowerCase();
+    const term = searchNorm((form.querySelector(`#${searchId}`).value || '').trim());
     if (term) {
       orderProducts = orderProducts.filter(p =>
-        (p['Product name'] || '').toLowerCase().includes(term) || (p['Product code'] || '').toLowerCase().includes(term));
+        searchMatch(p['Product name'], term) || searchMatch(p['Product code'], term));
     }
     if (!orderProducts.length) {
       mount.innerHTML = `<div class="empty" style="padding:12px 0;">No products match "${escapeHtml(term)}".</div>`;
