@@ -518,6 +518,16 @@ dialog .session-banner{top:12px}
 
 /* Picking/cutting/packing lists get printed and taken to the warehouse
    floor — strip the app chrome down to just the list content. */
+/* Cheeses page: a cheese's SKUs by channel (cheeses.html) */
+.cz-channel{margin-bottom:18px}
+.cz-channel h4{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.cz-sku{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;margin-bottom:6px}
+.cz-sku-t{flex:1;min-width:0}
+.cz-sku-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cz-empty{font-size:13px;color:var(--mist);padding:6px 0}
+.cz-link{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cz-link select{flex:1;min-width:0}
+
 /* Order/PO dialogs opened in place over another page (openInPlace in
    js/shell.js): the parent page shows the shade, the embedded page only
    its dialog, with its own backdrop turned off so the shade does the dimming. */

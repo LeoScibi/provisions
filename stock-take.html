@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=30">
+<link rel="stylesheet" href="css/style.css?v=31">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <style>
   /* Stock take print sheet: black & white, landscape, two columns per page —
@@ -127,8 +127,9 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=3"></script>
+<script src="js/shell.js?v=4"></script>
 <script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=3"></script>
 <script>
   let token = null;
   let stockTake = null;   // { rowNumber, obj } from StockTakes, or null if none in progress
@@ -209,14 +210,17 @@
     const cfg = getStoredConfig();
     setStatus('Loading...');
     try {
-      const [stRows, productRows] = await Promise.all([
+      const [stRows, productRows, cheeses] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'StockTakes!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Products!A:Z', token)
+        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
+        loadCheeses(cfg.spreadsheetId)
       ]);
       const stockTakes = toRowObjects(stRows);
       products = toObjects(productRows);
       productByCode = {};
       products.forEach(p => { productByCode[p['Product code']] = p; });
+      registerProducts(products);
+      registerCheeses(cheeses);
 
       const active = stockTakes.find(r => r.obj.STATUS === 'In Progress');
       if (active) {
@@ -323,7 +327,7 @@
       return;
     }
     tbody.innerHTML = view.map(l => {
-      const photo = l.prod['Photo URL'];
+      const photo = productPhoto(l.prod);
       const box = 'width:52px;height:52px;border-radius:8px;vertical-align:middle;background:#EEF0F2;';
       const photoHtml = photo
         ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" style="${box}object-fit:cover;display:block;">`
@@ -538,7 +542,7 @@
       return;
     }
     tbody.innerHTML = view.map(l => {
-      const photo = l.prod['Photo URL'];
+      const photo = productPhoto(l.prod);
       const box = 'width:52px;height:52px;border-radius:8px;vertical-align:middle;background:#EEF0F2;';
       const photoHtml = photo
         ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" style="${box}object-fit:cover;display:block;">`
@@ -647,7 +651,8 @@
     document.getElementById('rapidTitle').textContent = prod['Product name'] || line.obj['PRODUCT CODE'];
     document.getElementById('rapidSubtitle').textContent = `${line.obj['PRODUCT CODE']}${prod['Category'] ? ' · ' + prod['Category'] : ''}`;
     const photo = document.getElementById('rapidPhoto');
-    if (prod['Photo URL']) { photo.src = prod['Photo URL']; photo.style.visibility = 'visible'; }
+    const photoUrl = productPhoto(prod);
+    if (photoUrl) { photo.src = photoUrl; photo.style.visibility = 'visible'; }
     else { photo.removeAttribute('src'); photo.style.visibility = 'hidden'; }
     document.getElementById('rapidSystemQty').textContent = `${(parseFloat(line.obj['SYSTEM QTY']) || 0).toFixed(2)} ${unitLabel(line.obj.UNIT)}`;
     const input = document.getElementById('rapidInput');

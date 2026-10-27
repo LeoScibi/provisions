@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Cheeses</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=31">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+
+<header class="topbar no-print" id="topbar"></header>
+
+<main>
+  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
+    <h2 style="margin:0;">Cheeses</h2>
+    <button type="button" class="btn ghost sm" id="migrateBtn" style="margin-left:auto;">Create cheeses from products</button>
+  </div>
+
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+
+  <div id="cheesesMount"></div>
+</main>
+
+<dialog id="migrateDialog">
+  <div class="dlg-h">
+    <div>
+      <div class="ttl">Create cheeses from products</div>
+    </div>
+    <button type="button" class="dlg-close" data-close aria-label="Close">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="dlg-b" id="migrateBody"></div>
+  <div class="dlg-f">
+    <button type="button" class="btn ghost" data-close>Cancel</button>
+    <button type="button" class="btn" id="migrateApplyBtn" disabled>Create</button>
+  </div>
+</dialog>
+
+<script src="js/config.js?v=4"></script>
+<script src="js/sheets.js?v=4"></script>
+<script src="js/shell.js?v=4"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=3"></script>
+<script src="js/drive.js?v=3"></script>
+<script src="js/dialog-guard.js?v=1"></script>
+<script src="js/searchable-select.js?v=2"></script>
+<script src="js/crud-page.js?v=20"></script>
+<script>
+  // A cheese is what a photo, spec sheet and training notes belong to. Its
+  // SKUs live in Products, linked by Products."Cheese ID": each linked
+  // product is a Wholesale SKU (the whole wheel plus any portions), except
+  // the codes in this cheese's Shop SKU / Selfridges SKU fields, which fill
+  // those two channels — one SKU each, and either may be empty.
+
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    const token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+
+  const toObjects = ([head = [], ...rows]) => rows.map((r, i) => ({ rowNumber: i + 2, ...Object.fromEntries(head.map((h, j) => [h, r[j] ?? ''])) }));
+
+  // Products, plus the column letter of Products."Cheese ID" (null until
+  // Setup has added it).
+  async function loadProducts() {
+    const rows = await sheetsGet(getStoredConfig().spreadsheetId, 'Products!A:AZ');
+    const idx = (rows[0] || []).indexOf('Cheese ID');
+    return { products: toObjects(rows).filter(p => p['Product code']), cheeseCol: idx >= 0 ? colLetter(idx + 1) : null };
+  }
+
+  const isCheese = p => (p.Category || '').toLowerCase() === 'cheese';
+  const fileSlug = s => 'cheese-' + searchNorm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  // ---- the SKUs tab of a cheese's record ----
+
+  async function renderCheeseSkus(container, pick) {
+    container.innerHTML = `<div class="sp-section"><div class="sp-loading">Loading SKUs…</div></div>`;
+    let products, cheeseCol;
+    try {
+      ({ products, cheeseCol } = await loadProducts());
+      registerProducts(products);
+    } catch (err) {
+      container.innerHTML = `<div class="sp-section"><div class="note">Couldn't load products: ${escapeHtml(err.message)}</div></div>`;
+      return;
+    }
+    const id = pick('ID');
+    registerCheeses([{ ID: id, 'Photo URL': pick('Photo URL') }]);
+    const shop = (pick('Shop SKU') || '').trim(), selfridges = (pick('Selfridges SKU') || '').trim();
+    const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
+    const linked = products.filter(p => p['Cheese ID'] === id);
+    const wholesale = linked.filter(p => p['Product code'] !== shop && p['Product code'] !== selfridges)
+      .sort((a, b) => (parseFloat(b['Nominal weight (kg)']) || 0) - (parseFloat(a['Nominal weight (kg)']) || 0));
+    const unlinked = products.filter(p => isCheese(p) && !p['Cheese ID'])
+      .sort((a, b) => (a['Product name'] || '').localeCompare(b['Product name'] || ''));
+
+    const skuRow = (p, removable) => `
+      <div class="cz-sku">
+        ${productThumb(p, 'xs')}
+        <div class="cz-sku-t"><div class="cz-sku-name">${escapeHtml(p['Product name'])}</div>
+          <div class="code">${escapeHtml(p['Product code'])}${p['Cut from (code)'] ? ` · cut from ${escapeHtml(p['Cut from (code)'])}` : ''}${p['Nominal weight (kg)'] ? ` · ${escapeHtml(p['Nominal weight (kg)'])}kg` : ''}</div></div>
+        ${removable ? `<button type="button" class="sp-remove" data-unlink="${escapeHtml(p['Product code'])}" title="Unlink from this cheese" aria-label="Unlink ${escapeHtml(p['Product name'])}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ''}
+      </div>`;
+    const channel = (label, code) => {
+      if (!code) return `<div class="cz-empty">No ${label} SKU — set one under Details if this cheese is sold there.</div>`;
+      const p = byCode[code];
+      return p ? skuRow(p, false) : `<div class="cz-sku"><span class="pthumb pthumb-xs"></span><div class="cz-sku-t"><div class="cz-sku-name">${escapeHtml(code)}</div><div class="code">Not in Products — likely only in Xero</div></div></div>`;
+    };
+
+    container.innerHTML = `
+      <div class="sp-section">
+        ${!cheeseCol ? `<div class="note">Re-run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> to add the Cheese ID column to Products before linking SKUs.</div>` : ''}
+        <div class="cz-channel"><h4>Wholesale <span class="code">${wholesale.length}</span></h4>
+          ${wholesale.length ? wholesale.map(p => skuRow(p, !!cheeseCol)).join('') : '<div class="cz-empty">No wholesale SKUs linked.</div>'}
+          ${cheeseCol ? `<div class="cz-link">
+            <select id="cz_linkSel"><option value="">Link another product…</option>${unlinked.map(p => `<option value="${escapeHtml(p['Product code'])}">${escapeHtml(p['Product name'])} (${escapeHtml(p['Product code'])})</option>`).join('')}</select>
+            <button type="button" class="btn ghost sm" id="cz_linkBtn">Link</button>
+          </div>` : ''}
+        </div>
+        <div class="cz-channel"><h4>Shop</h4>${channel('Shop', shop)}</div>
+        <div class="cz-channel"><h4>Selfridges</h4>${channel('Selfridges', selfridges)}</div>
+      </div>`;
+
+    const setCheese = async (code, value) => {
+      const p = byCode[code];
+      await sheetsUpdateRange(getStoredConfig().spreadsheetId, `Products!${cheeseCol}${p.rowNumber}`, [[value]]);
+      showToast(value ? `Linked ${p['Product name']}` : `Unlinked ${p['Product name']}`);
+      renderCheeseSkus(container, pick);
+    };
+    container.querySelector('#cz_linkBtn')?.addEventListener('click', () => {
+      const code = container.querySelector('#cz_linkSel').value;
+      if (code) setCheese(code, id).catch(err => showToast('Couldn’t link: ' + err.message, 'error'));
+    });
+    container.querySelectorAll('[data-unlink]').forEach(b => b.addEventListener('click', () =>
+      setCheese(b.dataset.unlink, '').catch(err => showToast('Couldn’t unlink: ' + err.message, 'error'))));
+    const sel = container.querySelector('#cz_linkSel');
+    if (sel) enhanceSelect(sel);
+  }
+
+  // ---- one-off migration: group existing cheese products into cheeses ----
+  //
+  // A cut portion belongs to the whole it's "Cut from"; otherwise the cheese
+  // is everything before " — " in the name ("Comté Petite 10/14M — 1/4
+  // wheel 9kg" → "Comté Petite 10/14M"), so a portion missing its "Cut
+  // from" still lands with its whole. A name without " — " is a cheese with
+  // one SKU, its trailing weight dropped ("Brie Dongé 3kg" → "Brie Dongé")
+  // unless that would merge two different formats (Délice de Bourgogne
+  // 2kg / 200g stay apart). A "(Selfridges)" product fills the Selfridges
+  // slot of the one wholesale cheese with the same name, or becomes a
+  // cheese of its own. Products already linked are left alone, and a
+  // cheese that already exists by name is reused, so it's safe to re-run.
+
+  const SELFRIDGES_RE = /\s*\(Selfridges\)\s*$/i;
+  const WEIGHT_RE = /\s+\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(?:kg|g)$/i;
+
+  function planCheeses(products, cheeses) {
+    const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
+    const rootOf = p => { let cur = p; for (let n = 0; n < 3 && cur['Cut from (code)'] && byCode[cur['Cut from (code)']]; n++) cur = byCode[cur['Cut from (code)']]; return cur; };
+    const baseName = p => {
+      const name = (p['Product name'] || '').replace(SELFRIDGES_RE, '').trim();
+      const i = name.indexOf(' — ');
+      return { name: i >= 0 ? name.slice(0, i).trim() : name, dashed: i >= 0 };
+    };
+    const candidates = products.filter(p => isCheese(p) && !p['Cheese ID']);
+    const groups = new Map();
+
+    candidates.filter(p => !SELFRIDGES_RE.test(p['Product name'] || '')).forEach(p => {
+      const { name, dashed } = baseName(rootOf(p));
+      const key = searchNorm(name);
+      if (!groups.has(key)) groups.set(key, { name, dashed, members: [], selfridges: '' });
+      groups.get(key).members.push(p);
+    });
+
+    // Drop trailing weights where that keeps every name distinct.
+    const stripped = g => g.dashed ? g.name : g.name.replace(WEIGHT_RE, '').trim();
+    const counts = {};
+    groups.forEach(g => { const k = searchNorm(stripped(g)); counts[k] = (counts[k] || 0) + 1; });
+    groups.forEach(g => { if (counts[searchNorm(stripped(g))] === 1) g.name = stripped(g); });
+
+    candidates.filter(p => SELFRIDGES_RE.test(p['Product name'] || '')).forEach(p => {
+      const name = baseName(p).name;
+      const k = searchNorm(name.replace(WEIGHT_RE, '').trim());
+      const matches = [...groups.values()].filter(g => !g.selfridgesOnly && searchNorm(g.name.replace(WEIGHT_RE, '').trim()) === k);
+      if (matches.length === 1 && !matches[0].selfridges) {
+        matches[0].selfridges = p['Product code'];
+        matches[0].members.push(p);
+      } else {
+        const key = 'selfridges:' + p['Product code'];
+        groups.set(key, { name: name.replace(WEIGHT_RE, '').trim() || name, dashed: false, members: [p], selfridges: p['Product code'], selfridgesOnly: true });
+      }
+    });
+
+    const existingByName = Object.fromEntries(cheeses.map(c => [searchNorm(c['Cheese name']), c]));
+    return [...groups.values()].map(g => {
+      const wholesale = g.members.filter(p => p['Product code'] !== g.selfridges);
+      const whole = wholesale.find(p => !p['Cut from (code)'] && /—\s*whole/i.test(p['Product name']))
+        || wholesale.find(p => !p['Cut from (code)']) || g.members[0];
+      const first = key => [whole, ...g.members].map(p => (p[key] || '').toString().trim()).find(Boolean) || '';
+      const existing = existingByName[searchNorm(g.name)];
+      return {
+        name: g.name,
+        existingId: existing ? existing.ID : '',
+        members: g.members,
+        wholesale,
+        selfridges: g.selfridges,
+        nominal: whole['Pricing basis'] === 'Per kg' ? (whole['Nominal weight (kg)'] || '') : '',
+        photo: first('Photo URL'),
+        techSheet: first('Tech sheet URL'),
+        training: first('Training notes')
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  let migration = null; // { plan, products, cheeseCol, cheeseRows }
+
+  async function openMigration() {
+    const dlg = document.getElementById('migrateDialog');
+    const body = document.getElementById('migrateBody');
+    const applyBtn = document.getElementById('migrateApplyBtn');
+    body.innerHTML = '<div class="sp-loading">Reading products…</div>';
+    applyBtn.disabled = true;
+    dlg.showModal();
+    try {
+      const cfg = getStoredConfig();
+      const [{ products, cheeseCol }, cheeseRows] = await Promise.all([
+        loadProducts(),
+        sheetsGet(cfg.spreadsheetId, 'Cheeses!A:Z').catch(() => null)
+      ]);
+      if (!cheeseCol || !cheeseRows || !cheeseRows.length) {
+        body.innerHTML = `<div class="note">Re-run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> first — it adds the Cheeses tab and the Cheese ID column on Products.</div>`;
+        return;
+      }
+      registerProducts(products);
+      const plan = planCheeses(products, toObjects(cheeseRows));
+      migration = { plan, products, cheeseCol, cheeseRows };
+      const newCount = plan.filter(g => !g.existingId).length;
+      const linkCount = plan.reduce((n, g) => n + g.members.length, 0);
+      if (!plan.length) {
+        body.innerHTML = '<div class="note ok">Every cheese product is already linked to a cheese — nothing to do.</div>';
+        return;
+      }
+      body.innerHTML = `
+        <p style="margin:0 0 12px; font-size:13.5px;">This creates <strong>${newCount} cheese(s)</strong>${plan.length > newCount ? ` (and reuses ${plan.length - newCount} existing)` : ''} and links <strong>${linkCount} product(s)</strong> to them. Nothing is deleted or renamed; product photos are copied onto the cheese. Check the grouping, then Create.</p>
+        <div class="scroll" style="max-height:52vh; overflow:auto;">
+          <table><thead><tr><th>Cheese</th><th>Wholesale SKUs</th><th>Selfridges</th><th class="num">Wheel kg</th></tr></thead>
+          <tbody>${plan.map(g => `
+            <tr>
+              <td>${productCell({ 'Photo URL': g.photo }, `<strong>${escapeHtml(g.name)}</strong>${g.existingId ? ` <span class="tag t-amb">exists · ${escapeHtml(g.existingId)}</span>` : ''}`, 'xs')}</td>
+              <td class="code" style="white-space:normal;">${g.wholesale.map(p => escapeHtml(p['Product code'])).join(', ') || '—'}</td>
+              <td class="code">${escapeHtml(g.selfridges) || '—'}</td>
+              <td class="num">${escapeHtml(g.nominal) || '—'}</td>
+            </tr>`).join('')}</tbody></table>
+        </div>`;
+      applyBtn.textContent = `Create ${newCount} cheese(s) and link ${linkCount} product(s)`;
+      applyBtn.disabled = false;
+    } catch (err) {
+      body.innerHTML = `<div class="note">Couldn't read the sheet: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function applyMigration(table) {
+    const { plan, cheeseCol, cheeseRows } = migration;
+    const cfg = getStoredConfig();
+    const applyBtn = document.getElementById('migrateApplyBtn');
+    applyBtn.disabled = true;
+    try {
+      let base = cheeseRows;
+      const newRows = [];
+      plan.forEach(g => {
+        if (g.existingId) { g.id = g.existingId; return; }
+        g.id = nextId(base, 'CHZ');
+        base = base.concat([[g.id]]);
+        newRows.push([g.id, g.name, '', g.selfridges, g.nominal, g.photo, g.techSheet, g.training, '', 'Yes']);
+      });
+      if (newRows.length) await sheetsAppendRows(cfg.spreadsheetId, 'Cheeses!A:J', newRows);
+      const links = plan.flatMap(g => g.members.map(p => ({ range: `Products!${cheeseCol}${p.rowNumber}`, values: [[g.id]] })));
+      for (let i = 0; i < links.length; i += 200) await sheetsBatchUpdateValues(cfg.spreadsheetId, links.slice(i, i + 200));
+      document.getElementById('migrateDialog').close();
+      showToast(`Created ${newRows.length} cheese(s), linked ${links.length} product(s)`);
+      (await table).reload?.();
+    } catch (err) {
+      applyBtn.disabled = false;
+      document.getElementById('migrateBody').insertAdjacentHTML('afterbegin', `<div class="note">Error: ${escapeHtml(err.message)} — nothing after this point was written; it's safe to try again.</div>`);
+    }
+  }
+
+  window.addEventListener('load', () => {
+    if (!requireAuth()) return;
+
+    const table = initCrudTable({
+      mount: '#cheesesMount',
+      title: 'Cheeses',
+      tab: 'Cheeses',
+      headers: ['ID','Cheese name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active'],
+      autoId: 'CHZ',
+      fields: [
+        { key: 'Cheese name', label: 'Cheese name', type: 'text', required: true, primary: true, placeholder: 'e.g. Comté Petite 10/14M' },
+        { key: 'Shop SKU', label: 'Shop SKU', type: 'text', placeholder: 'Product / Xero code used by the shops' },
+        { key: 'Selfridges SKU', label: 'Selfridges SKU', type: 'text', placeholder: 'Product / Xero code used for Selfridges' },
+        { key: 'Nominal wheel weight (kg)', label: 'Nominal wheel weight (kg)', type: 'number' },
+        {
+          key: 'Photo URL', label: 'Photo', type: 'image', placeholder: 'https://... — or upload below',
+          onUpload: async (file, getField) => {
+            const name = getField('Cheese name');
+            if (!name) throw new Error('Enter the cheese name first.');
+            const folderId = await driveEnsureFolder(tryResumeSession());
+            return driveUploadProductPhoto(folderId, fileSlug(name), file, tryResumeSession());
+          }
+        },
+        {
+          key: 'Tech sheet URL', label: 'Spec sheet', type: 'file', section: 'Docs & training',
+          placeholder: 'https://... — paste a link, or upload a file below',
+          onUpload: async (file, getField) => {
+            const name = getField('Cheese name');
+            if (!name) throw new Error('Enter the cheese name first.');
+            const folderId = await driveEnsureDocsFolder(tryResumeSession());
+            return driveUploadProductDoc(folderId, fileSlug(name), file, tryResumeSession());
+          }
+        },
+        { key: 'Training notes', label: 'Training notes', type: 'textarea', section: 'Docs & training', placeholder: 'Cutting, storage, allergens, talking points…' },
+        { key: 'Notes', label: 'Notes', type: 'textarea' },
+        { key: 'Active', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No' }
+      ],
+      detailSection: { label: 'SKUs', first: true, render: (container, pick) => renderCheeseSkus(container, pick) }
+    });
+
+    document.getElementById('migrateBtn').addEventListener('click', openMigration);
+    document.getElementById('migrateApplyBtn').addEventListener('click', () => applyMigration(table));
+    document.querySelectorAll('#migrateDialog [data-close]').forEach(b => b.addEventListener('click', () => document.getElementById('migrateDialog').close()));
+  });
+</script>
+</body>
+</html>

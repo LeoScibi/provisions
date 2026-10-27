@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=30">
+<link rel="stylesheet" href="css/style.css?v=31">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -27,12 +27,13 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=3"></script>
+<script src="js/shell.js?v=4"></script>
 <script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=3"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/supplier-products.js?v=1"></script>
-<script src="js/crud-page.js?v=19"></script>
+<script src="js/crud-page.js?v=20"></script>
 <script>
   function requireAuth() {
     const cfg = getStoredConfig();
@@ -53,12 +54,15 @@
     container.innerHTML = `<div class="sp-section"><div class="sp-head"><h3>Products</h3></div><div class="sp-loading">Loading products…</div></div>`;
     let products, links;
     try {
-      const [productRows, spLinks] = await Promise.all([
+      const [productRows, spLinks, cheeses] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ'),
-        loadSupplierProducts(cfg.spreadsheetId)
+        loadSupplierProducts(cfg.spreadsheetId),
+        loadCheeses(cfg.spreadsheetId)
       ]);
       const [head = [], ...rows] = productRows;
       products = rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? '']))).filter(p => p['Product code']);
+      registerProducts(products);
+      registerCheeses(cheeses);
       links = spLinks;
     } catch (err) {
       container.innerHTML = `<div class="sp-section"><div class="note">Couldn't load this supplier's products: ${escapeHtml(err.message)}</div></div>`;
@@ -79,7 +83,7 @@
         <div class="sp-cols"><span>Product</span><span>Their code</span><span>Cost £</span><span></span></div>
         <div class="sp-list">${supplied.map(({ product: p, link, isDefault }) => `
           <div class="sp-row" data-code="${escapeHtml(p['Product code'])}">
-            ${p['Photo URL'] ? `<img class="sp-photo" src="${escapeHtml(p['Photo URL'])}" alt="">` : '<span class="sp-photo"></span>'}
+            ${productPhoto(p) ? `<img class="sp-photo" src="${escapeHtml(productPhoto(p))}" alt="">` : '<span class="sp-photo"></span>'}
             <div class="sp-info">
               <div class="sp-name">${escapeHtml(p['Product name'])}</div>
               <div class="sp-sub"><span class="code">${escapeHtml(p['Product code'])}</span>${p.Category ? ` · ${escapeHtml(p.Category)}` : ''}${isDefault ? ' <span class="tag t-ok">Default supplier</span>' : ''}</div>

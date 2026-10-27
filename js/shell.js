@@ -20,6 +20,7 @@
   const NAV = [
     [['index.html', 'Dashboard', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>']],
     [['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
+     ['cheeses.html', 'Cheeses', '<path d="M3 16.5L13 6l8 4.5v6z"/><path d="M3 16.5h18"/><circle cx="10" cy="13" r="1.2"/><circle cx="16" cy="12.5" r="1"/>'],
      ['suppliers.html', 'Suppliers', '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/>'],
      ['customers.html', 'Customers', '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.2 6.5-6.2s6.5 2.6 6.5 6.2"/><circle cx="17.5" cy="9" r="2.3"/><path d="M15.8 13.5c2.6.5 4.2 2.4 4.2 5"/>'],
      ['transport.html', 'Transport', '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>']],

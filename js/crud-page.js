@@ -32,6 +32,7 @@
 //     { key:'SUPPLIER', label:'Supplier', type:'ref', refTab:'Suppliers', refValue:'NAME' },
 //     { key:'COST', label:'Cost', type:'number', format:'currency' },
 //     { key:'PHOTO', label:'Photo', type:'image' },             // plain URL input; renders as a table thumbnail
+//     { key:'PHOTO', label:'Photo', type:'image', onUpload },   // + an Upload button, same contract as 'file' below
 //   ],
 //   inlineEdit: true,         // opt-in: click a cell to edit it in place instead
 //                              // of opening the dialog (see below) — off by
@@ -52,7 +53,7 @@
 //                                 // `select` options order when it has one
 //     groupBy: 'Category',       // field the card rows are bucketed under
 //                                 // within the active tab (usually = tabsBy)
-//     photo: 'Photo URL',
+//     photo: 'Photo URL',          // or (pick) => url, for a photo that isn't one column
 //     name: 'Product name',
 //     tag: (pick) => ({ text: pick('Storage'), on: pick('Storage') === 'Chilled' }),
 //     sub: (pick) => [pick('Producer'), pick('Default supplier')].filter(Boolean).join(' · '),
@@ -350,7 +351,7 @@ async function initCrudTable(config) {
       return `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</option>`;
     }).join('')}</select>`;
     if (f.type === 'ref') return `<select id="${id}"><option value="">Loading…</option></select>`;
-    if (f.type === 'file') return `
+    if (f.type === 'file' || (f.type === 'image' && f.onUpload)) return `
       <input id="${id}" placeholder="${escapeHtml(f.placeholder || '')}">
       <div class="file-field-row">
         <input type="file" id="${id}_file" class="file-field-input">
@@ -383,7 +384,7 @@ async function initCrudTable(config) {
   // value, e.g. to name the uploaded file after the record's own key field.
   function wireFileFields() {
     fields.forEach(f => {
-      if (f.type !== 'file') return;
+      if (f.type !== 'file' && !(f.type === 'image' && f.onUpload)) return;
       const urlInput = form.querySelector(`#${fid(f)}`);
       urlInput.addEventListener('input', () => syncFileFieldLink(f));
       urlInput.addEventListener('change', () => syncFileFieldLink(f));
@@ -828,9 +829,15 @@ async function initCrudTable(config) {
     }
   }
 
+  function catPhoto(pick) {
+    if (!catalogue.photo) return '';
+    const v = typeof catalogue.photo === 'function' ? catalogue.photo(pick) : pick(catalogue.photo);
+    return (v || '').toString().trim();
+  }
+
   function catRowHtml(d) {
     const pick = (key) => get(d.values, key);
-    const photoUrl = catalogue.photo ? (pick(catalogue.photo) || '').toString().trim() : '';
+    const photoUrl = catPhoto(pick);
     const name = catalogue.name ? pick(catalogue.name) : '';
     const tagInfo = catalogue.tag ? catalogue.tag(pick) : null;
     const subText = catalogue.sub ? catalogue.sub(pick) : '';
@@ -865,7 +872,7 @@ async function initCrudTable(config) {
   // Card variant of catRowHtml, for `catalogue.layout: 'cards'`.
   function catCardHtml(d) {
     const pick = (key) => get(d.values, key);
-    const photoUrl = catalogue.photo ? (pick(catalogue.photo) || '').toString().trim() : '';
+    const photoUrl = catPhoto(pick);
     const name = catalogue.name ? pick(catalogue.name) : '';
     const tagInfo = catalogue.tag ? catalogue.tag(pick) : null;
     const subText = catalogue.sub ? catalogue.sub(pick) : '';
@@ -1050,7 +1057,7 @@ async function initCrudTable(config) {
     const photoEl = root.querySelector(`#${tab}_dlgPhoto`);
     const kickerEl = root.querySelector(`#${tab}_dlgKicker`);
     const subEl = root.querySelector(`#${tab}_dlgSub`);
-    const photoUrl = rowValues && catalogue.photo ? (pick(catalogue.photo) || '').toString().trim() : '';
+    const photoUrl = rowValues ? catPhoto(pick) : '';
     if (photoEl) { photoEl.src = photoUrl; photoEl.style.display = photoUrl ? '' : 'none'; }
     if (kickerEl) kickerEl.textContent = rowValues && catalogue.kicker ? catalogue.kicker(pick) : '';
     if (subEl) subEl.textContent = rowValues && catalogue.detailSub ? catalogue.detailSub(pick) : '';

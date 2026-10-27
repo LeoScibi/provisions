@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=30">
+<link rel="stylesheet" href="css/style.css?v=31">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -59,13 +59,14 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=3"></script>
+<script src="js/shell.js?v=4"></script>
 <script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=3"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/drive.js?v=3"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/stock-calc.js?v=2"></script>
-<script src="js/crud-page.js?v=19"></script>
+<script src="js/crud-page.js?v=20"></script>
 <script>
   function requireAuth() {
     const cfg = getStoredConfig();
@@ -161,7 +162,7 @@
       mount: '#productsMount',
       title: 'Products',
       tab: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes'],
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Cheese ID'],
       autoId: null,
       fields: [
         { key: 'Product code', label: 'Product code', type: 'text', required: true, placeholder: 'e.g. CCS050' },
@@ -206,15 +207,21 @@
         {
           key: 'Training notes', label: 'Training sheet', type: 'textarea', section: 'Docs & training',
           placeholder: 'Everything staff should know handling this product — cutting, storage, allergens, talking points...'
-        }
+        },
+        { key: 'Cheese ID', label: 'Cheese', type: 'text', placeholder: 'e.g. CHZ012 — set from the Cheeses page' }
       ],
+      // So a portion with no photo can show the whole it's cut from.
+      onLoad: (rows, get) => registerProducts(rows.map(r => ({
+        'Product code': get(r.values, 'Product code'), 'Photo URL': get(r.values, 'Photo URL'), 'Cheese ID': get(r.values, 'Cheese ID')
+      }))),
       inlineEdit: true,
       catalogue: {
         layout: 'cards',
         stock: stockFigure,
         tabsBy: 'Category',
         groupBy: 'Category',
-        photo: 'Photo URL',
+        // The cheese's photo when it has one (one upload covers all its SKUs).
+        photo: (pick) => productPhoto({ 'Photo URL': pick('Photo URL'), 'Cheese ID': pick('Cheese ID'), 'Cut from (code)': pick('Cut from (code)') }),
         name: 'Product name',
         tag: (pick) => ({ text: pick('Storage'), on: pick('Storage') === 'Chilled' }),
         sub: (pick) => [pick('Producer'), pick('Default supplier')].filter(Boolean).join(' · '),
@@ -254,6 +261,7 @@
     });
 
     loadStock().then(() => products.then(p => p.rerender()));
+    loadCheeses(getStoredConfig().spreadsheetId).then(cheeses => { registerCheeses(cheeses); products.then(p => p.rerender()); });
 
     document.getElementById('addProductBtn').addEventListener('click', () => products.then(p => p.openAdd()));
 

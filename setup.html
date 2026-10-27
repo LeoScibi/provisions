@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=30">
+<link rel="stylesheet" href="css/style.css?v=31">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -34,7 +34,7 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=3"></script>
+<script src="js/shell.js?v=4"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -118,7 +118,7 @@
   const REQUIRED_TABS = [
     {
       title: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes']
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Cheese ID']
     },
     {
       title: 'Suppliers',
@@ -166,6 +166,15 @@
       // even without a row here (see js/supplier-products.js).
       title: 'SupplierProducts',
       headers: ['ID','SUPPLIER','PRODUCT CODE','SUPPLIER PRODUCT CODE','COST PRICE £','NOTES','UPDATED']
+    },
+    {
+      // One row per cheese — the thing a photo, spec sheet and training notes
+      // belong to (cheeses.html). Its SKUs: every Products row whose Cheese ID
+      // points here is a Wholesale SKU (the whole wheel plus any portions),
+      // except the codes in SHOP SKU / SELFRIDGES SKU, which fill those two
+      // channels — one SKU each, either may be empty.
+      title: 'Cheeses',
+      headers: ['ID','Cheese name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active']
     },
     {
       // Hauliers that bring goods in to Provisions, with contact details
