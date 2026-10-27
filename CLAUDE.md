@@ -26,7 +26,11 @@ models, sheet schemas, or conventions between the two.
   new page to its `NAV` list), the account menu (Setup and Sign out live
   there), toasts (`showToast`), and all loading feedback — page loader,
   top-bar progress bar, and a spinner on the clicked button — driven by the
-  `google-request` events that `googleFetch` fires.
+  `google-request` events that `googleFetch` fires. It also opens orders
+  and POs in place: any link to `orders.html?open=ID` or
+  `purchase-orders.html?open=ID` loads that page's dialog over the current
+  page in an `?embed=1` iframe instead of navigating (set
+  `window.onRecordDialogClosed` to refresh the page afterwards).
 - **Every Google API call goes through `googleFetch` (`js/sheets.js`)**, never
   a bare `fetch`. It sends the freshest stored token and, when the session
   has expired (no token or a 401), waits for the Reconnect banner in

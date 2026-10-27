@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=27">
+<link rel="stylesheet" href="css/style.css?v=28">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -41,7 +41,7 @@
 </main>
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=4"></script>
-<script src="js/shell.js?v=1"></script>
+<script src="js/shell.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
 <script src="js/product-ui.js?v=1"></script>
 <script>
@@ -124,6 +124,8 @@
 
   async function loadLists() {
     if (!requireAuth()) return;
+    // Don't drop a truck-order change still waiting to save.
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; await saveDrops(); }
     const cfg = getStoredConfig();
     renderWeekLabel();
     setStatus('Loading...');
@@ -354,39 +356,38 @@
     return '<span class="tag t-warn">No zone</span>';
   }
 
+  // One compact block per order: a single header line (drop, customer,
+  // order, date, address) and one line per item, so a week's slips fit on
+  // a screen and a London run can be reordered without much scrolling.
   function slipHtml(order, drop) {
     const cust = data.customerByName[order.CUSTOMER] || {};
     const lines = packLines(order);
+    const fromHtml = l => l.isCut ? '<span class="tag t-chill">Cut piece · fridge</span>'
+      : l.lots.length ? l.lots.map(x => `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
+      : '<span class="tag t-warn">Not allocated</span>';
     return `
       <div class="panel slip" data-order-id="${escapeHtml(order.ID)}"${drop ? ' draggable="true"' : ''}>
-        <div class="panel-h">
+        <div class="slip-h">
           ${drop ? `<span class="drag-handle no-print" title="Drag to reorder" aria-hidden="true">⋮⋮</span><span class="drop-no">Drop ${drop}</span>` : ''}
           <h3>${escapeHtml(order.CUSTOMER)}</h3>
           <span class="code"><a href="orders.html?open=${encodeURIComponent(order.ID)}">${escapeHtml(order.ID)}</a></span>
-          <span class="muted" style="font-size:13px;">${escapeHtml(fmtDateShort(order['DELIVERY DATE']))}</span>
+          <span class="muted" style="font-size:12px;">${escapeHtml(fmtDateShort(order['DELIVERY DATE']))}</span>
           ${order.STATUS === 'Dispatched' ? '<span class="tag t-ok">Dispatched</span>' : ''}
-          ${drop ? `<span class="no-print" style="margin-left:auto; display:inline-flex; gap:6px;">
+          <span class="slip-addr" title="${escapeHtml(cust['Delivery address'] || '')}">${escapeHtml(cust['Delivery address'] || 'No delivery address on file')}</span>
+          ${drop ? `<span class="no-print" style="display:inline-flex; gap:4px;">
             <button type="button" class="btn ghost sm" data-move="-1" aria-label="Move up"${drop === 1 ? ' disabled' : ''}>&uarr;</button>
             <button type="button" class="btn ghost sm" data-move="1" aria-label="Move down">&darr;</button>
           </span>` : ''}
         </div>
-        <div class="slip-meta">
-          <span>${escapeHtml(cust['Delivery address'] || 'No delivery address on file')}</span>
-          ${order.NOTES ? `<span class="slip-notes">Note: ${escapeHtml(order.NOTES)}</span>` : ''}
-        </div>
-        <div class="scroll" style="overflow-x:auto;">
-          <table><thead><tr><th class="tick-col"></th><th>Product</th><th class="num">Qty</th><th>From</th></tr></thead>
-          <tbody>${lines.length ? lines.map(l => `
-            <tr${l.short ? ' style="background:var(--warn-bg);"' : ''}>
-              <td class="tick-col"><span class="tick-box"></span></td>
-              <td>${productCell(l.product, `<strong>${escapeHtml(l.name)}</strong><br><span class="code">${escapeHtml(l.code)}</span>`)}</td>
-              <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
-              <td>${l.isCut ? '<span class="tag t-chill">Cut piece · fridge</span>'
-                : l.lots.length ? l.lots.map(x => `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted" style="font-size:12px;">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
-                : '<span class="tag t-warn">Not allocated</span>'}</td>
-            </tr>`).join('') : `<tr><td colspan="4" class="muted">No lines on this order.</td></tr>`}
-          </tbody></table>
-        </div>
+        ${order.NOTES ? `<div class="slip-notes">Note: ${escapeHtml(order.NOTES)}</div>` : ''}
+        ${lines.length ? lines.map(l => `
+          <div class="slip-line${l.short ? ' short' : ''}">
+            <span class="tick-box"></span>
+            ${productThumb(l.product, 'xs')}
+            <span class="sl-name" title="${escapeHtml(l.name)}">${escapeHtml(l.name)}<span class="code">${escapeHtml(l.code)}</span></span>
+            <span class="sl-qty">${escapeHtml(qtyUnit(l.qty, l.unit))}</span>
+            <span class="sl-from">${fromHtml(l)}</span>
+          </div>`).join('') : '<div class="slip-line"><span></span><span></span><span class="muted">No lines on this order.</span></div>'}
       </div>`;
   }
 
@@ -448,6 +449,7 @@
   }
 
   async function saveDrops() {
+    saveTimer = null;
     const dirty = data.orders.filter(o => o._dirty);
     if (!dirty.length) return;
     const cfg = getStoredConfig();
@@ -486,6 +488,9 @@
   document.getElementById('printCutBtn').addEventListener('click', () => printOnly('cut'));
   document.getElementById('printPackBtn').addEventListener('click', () => printOnly('pack'));
   window.addEventListener('load', loadLists);
+  // An order opened in place (js/shell.js) may have changed lines or
+  // allocations — re-read so the lists match.
+  window.onRecordDialogClosed = loadLists;
 </script>
 </body>
 </html>

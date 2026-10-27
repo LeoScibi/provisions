@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=27">
+<link rel="stylesheet" href="css/style.css?v=28">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -85,7 +85,7 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=1"></script>
+<script src="js/shell.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
 <script src="js/product-ui.js?v=1"></script>
 <script>
@@ -304,7 +304,7 @@
       return;
     }
     list.innerHTML = pos.map(po => `
-      <a class="lrow" href="purchase-orders.html" data-po-id="${escapeHtml(po.ID)}">
+      <a class="lrow" href="purchase-orders.html?open=${encodeURIComponent(po.ID)}" data-po-id="${escapeHtml(po.ID)}">
         <div class="lrow-body">
           <div class="lrow-name">${escapeHtml(po.SUPPLIER)} <span class="code" style="margin-left:6px;">${escapeHtml(po.ID)}</span></div>
           <div class="lrow-meta">${escapeHtml(fmtDateRange(po['EXPECTED START DATE'], po['EXPECTED END DATE']))} &middot; ${dash.poLineCountById[po.ID] || 0} item(s)</div>
@@ -437,6 +437,9 @@
     refreshSignedInUI();
     loadDashboard();
   });
+  // An order or PO opened in place (js/shell.js) may have changed status,
+  // lines or stock — re-read so the panels match.
+  window.onRecordDialogClosed = loadDashboard;
 
   signInBtn.addEventListener('click', () => {
     tokenClient = initGoogleAuth({

@@ -247,6 +247,82 @@
     if (toastBox) park(toastBox);
   }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
 
+  // ---- Opening an order or PO in place ----
+  // A link to orders.html?open=ID or purchase-orders.html?open=ID anywhere
+  // in the app opens that record's dialog over the current page instead of
+  // navigating away. The target page loads in a transparent full-screen
+  // iframe in "embed" mode (?embed=1: no top bar or list, just its dialog),
+  // so there's still only one order screen and one PO screen to maintain.
+  // When the dialog closes the iframe goes away and the page re-reads its
+  // data through window.onRecordDialogClosed, if it sets one.
+  const EMBED = new URLSearchParams(location.search).has('embed');
+  if (EMBED) document.documentElement.classList.add('embedded');
+
+  function openInPlace(url) {
+    const shade = document.createElement('div');
+    shade.className = 'record-shade';
+    shade.innerHTML = '<span class="record-spinner" aria-label="Loading"></span>';
+    const frame = document.createElement('iframe');
+    frame.className = 'record-frame';
+    frame.title = 'Order details';
+    frame.src = url + (url.includes('?') ? '&' : '?') + 'embed=1';
+    document.body.append(shade, frame);
+
+    const done = () => {
+      window.removeEventListener('message', onMessage);
+      frame.remove();
+      shade.remove();
+      if (typeof window.onRecordDialogClosed === 'function') window.onRecordDialogClosed();
+    };
+    // Clicking the shade while it's still loading gives up on it.
+    shade.addEventListener('click', () => { if (!frame.classList.contains('show')) done(); });
+    function onMessage(e) {
+      if (e.source !== frame.contentWindow || e.origin !== location.origin) return;
+      const type = e.data && e.data.provisionsEmbed;
+      if (type === 'ready') {
+        shade.classList.add('ready');
+        frame.classList.add('show');
+        frame.contentWindow.focus();
+      } else if (type === 'closed') {
+        done();
+      }
+    }
+    window.addEventListener('message', onMessage);
+  }
+  window.openInPlace = openInPlace;
+
+  if (!EMBED) {
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href]');
+      // Cmd/Ctrl/Shift-click still opens the full page in a new tab.
+      if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const url = new URL(a.href, location.href);
+      const target = url.pathname.split('/').pop();
+      if (url.origin !== location.origin || !url.searchParams.get('open')) return;
+      if (target !== 'orders.html' && target !== 'purchase-orders.html') return;
+      if (target === (location.pathname.split('/').pop() || 'index.html')) return; // that page opens its own dialogs
+      e.preventDefault();
+      openInPlace(target + url.search);
+    });
+  } else {
+    // Tell the parent page when the record's dialog has opened (show the
+    // iframe) and when every dialog has closed again (remove it). The short
+    // wait rides out a page closing one dialog and opening the next.
+    const tell = (type) => parent.postMessage({ provisionsEmbed: type }, location.origin);
+    let opened = false, closeTimer = null;
+    new MutationObserver(() => {
+      if (document.querySelector('dialog[open]')) {
+        clearTimeout(closeTimer);
+        if (!opened) { opened = true; tell('ready'); }
+      } else if (opened) {
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(() => { if (!document.querySelector('dialog[open]')) tell('closed'); }, 150);
+      }
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
+    // For a page whose deep-linked record doesn't exist (deleted meanwhile).
+    window.embedNothingToShow = () => tell('closed');
+  }
+
   renderTopbar();
   startFirstLoad();
   armExpiryTimer();

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=27">
+<link rel="stylesheet" href="css/style.css?v=28">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -44,7 +44,7 @@
 
 <script src="js/config.js?v=4"></script>
 <script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=1"></script>
+<script src="js/shell.js?v=2"></script>
 <script src="js/util.js?v=2"></script>
 <script src="js/product-ui.js?v=1"></script>
 <script src="js/supplier-products.js?v=1"></script>
@@ -239,6 +239,7 @@
       allocationsData = toRowObjects(allocationRows).map(r => r.obj);
       renderTable();
       setStatus(`Loaded ${poRowsData.length} purchase order(s).`, 'ok');
+      checkDeepLink();
     } catch (err) {
       setStatus('Error loading: ' + err.message, 'error');
     }
@@ -278,6 +279,17 @@
     const tr = e.target.closest('tr[data-id]');
     if (tr) openViewDialog(tr.dataset.id);
   });
+
+  // Deep link (?open=PO001) — used when a PO is opened in place from
+  // another page (see openInPlace in js/shell.js). The param is stripped
+  // the first time, so later reloads find nothing to do.
+  function checkDeepLink() {
+    const id = new URLSearchParams(location.search).get('open');
+    if (!id) return;
+    history.replaceState(null, '', location.pathname);
+    if (poRowsData.some(r => r.obj.ID === id)) openViewDialog(id);
+    else window.embedNothingToShow?.();
+  }
 
   attachOrderHoverCard(document.getElementById('poTable'), 'tr[data-id]', tr => {
     const po = poRowsData.find(r => r.obj.ID === tr.dataset.id);
