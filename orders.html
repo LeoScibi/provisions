@@ -370,10 +370,17 @@
   }
 
   function renderOrderSummary() {
+    const n = draftLines.length;
+    // View dialog: the count lives on its footer button, shown once
+    // something has been picked.
+    const addBtn = form.querySelector('#ord_view_addLinesBtn');
+    if (addBtn) {
+      addBtn.hidden = !n;
+      addBtn.textContent = `Add ${n} item${n === 1 ? '' : 's'} to order`;
+    }
     const el = form.querySelector(`#${activeSummaryId}`);
     if (!el) return;
-    if (!draftLines.length) { el.textContent = ''; return; }
-    el.textContent = `${draftLines.length} item${draftLines.length === 1 ? '' : 's'} added`;
+    el.textContent = n ? `${n} item${n === 1 ? '' : 's'} added` : '';
   }
 
   function productPickerRowHtml(p) {
@@ -574,16 +581,13 @@
           <label>Add product to this order</label>
           <input type="search" id="ord_view_productSearch" placeholder="Search products by name or code..." style="margin-bottom:10px;">
           <div id="ord_view_productPicker"></div>
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">
-            <div id="ord_view_addSummary" class="mono" style="font-size:13px; color:var(--steel);"></div>
-            <button type="button" class="btn ghost sm" id="ord_view_addLinesBtn">+ Add to order</button>
-          </div>
         </div>
 
         <div id="orderDlgStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
         <button type="button" class="btn danger" data-delete-order>Delete order</button>
+        <button type="button" class="btn" id="ord_view_addLinesBtn" hidden>Add 0 items to order</button>
         <button type="button" class="btn ghost" data-cancel>Close</button>
       </div>
     `;
