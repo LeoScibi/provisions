@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=25">
+<link rel="stylesheet" href="css/style.css?v=27">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -46,6 +46,7 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=1"></script>
 <script src="js/util.js?v=2"></script>
+<script src="js/product-ui.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=1"></script>
 <script>
@@ -141,8 +142,12 @@
     return `<span class="tag ${cls}">${escapeHtml(s)}</span>`;
   }
 
+  function productOf(code) {
+    return products.find(p => p['Product code'] === code);
+  }
+
   function productName(code) {
-    const p = products.find(p => p['Product code'] === code);
+    const p = productOf(code);
     return p ? p['Product name'] : code;
   }
 
@@ -163,6 +168,7 @@
       ]);
       customers = toRowObjects(customerRows).map(r => r.obj);
       products = toRowObjects(productRows).map(r => r.obj);
+      registerProducts(products);
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       allocationsData = toRowObjects(allocRows);
@@ -202,6 +208,25 @@
   document.getElementById('ordersTable').addEventListener('click', (e) => {
     const tr = e.target.closest('tr[data-id]');
     if (tr) openViewDialog(tr.dataset.id);
+  });
+
+  attachOrderHoverCard(document.getElementById('ordersTable'), 'tr[data-id]', tr => {
+    const order = ordersData.find(r => r.obj.ID === tr.dataset.id);
+    if (!order) return null;
+    const o = order.obj;
+    return {
+      title: o.CUSTOMER, id: o.ID, status: o.STATUS || 'New',
+      meta: [
+        o['DELIVERY DATE'] ? `Delivery ${fmtDateShort(o['DELIVERY DATE'])}` : 'No delivery date set',
+        o['PLACED BY'] ? `Placed by ${o['PLACED BY']}` : '',
+        o.NOTES ? `Note: ${o.NOTES}` : ''
+      ],
+      lines: orderLinesData.filter(l => l.obj['ORDER ID'] === o.ID).map(l => ({
+        product: productOf(l.obj['PRODUCT CODE']),
+        name: productName(l.obj['PRODUCT CODE']),
+        qty: qtyUnit(l.obj['QTY ORDERED'], l.obj.UNIT)
+      }))
+    };
   });
 
   // Deep link from the Dashboard/Lists pages (?open=ORD001) — opens straight
@@ -355,7 +380,7 @@
     const meta = productOrderMeta(p);
     const line = draftLines.find(l => l.code === code);
     const qty = line ? line.qty : 0;
-    const photoUrl = (p['Photo URL'] || '').toString().trim();
+    const photoUrl = productPhoto(p);
     const photoHtml = photoUrl
       ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">`
       : `<span class="cr-photo"></span>`;
@@ -609,7 +634,7 @@
 
     const row = `
       <tr>
-        <td>${escapeHtml(productName(l['PRODUCT CODE']))}<br><span class="code">${escapeHtml(l['PRODUCT CODE'])}</span></td>
+        <td>${productCell(productOf(l['PRODUCT CODE']), `${escapeHtml(productName(l['PRODUCT CODE']))}<br><span class="code">${escapeHtml(l['PRODUCT CODE'])}</span>`)}</td>
         <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
         <td class="num">${allocatedQty.toFixed(2)} ${unitLabel(l.UNIT)}</td>
         <td>${statusBadge}</td>

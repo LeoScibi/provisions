@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=25">
+<link rel="stylesheet" href="css/style.css?v=27">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -46,6 +46,7 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=1"></script>
 <script src="js/util.js?v=2"></script>
+<script src="js/product-ui.js?v=1"></script>
 <script src="js/supplier-products.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/daterange.js?v=1"></script>
@@ -128,8 +129,12 @@
     return `<span class="tag ${cls}">${escapeHtml(s)}</span>`;
   }
 
+  function productOf(code) {
+    return products.find(p => p['Product code'] === code);
+  }
+
   function productName(code) {
-    const p = products.find(p => p['Product code'] === code);
+    const p = productOf(code);
     return p ? p['Product name'] : code;
   }
 
@@ -227,6 +232,7 @@
       supplierLinks = spLinks;
       suppliers = toRowObjects(supplierRows).map(r => r.obj);
       products = toRowObjects(productRows).map(r => r.obj);
+      registerProducts(products);
       poRowsData = toRowObjects(poRows);
       polRowsData = toRowObjects(polRows);
       deliveriesData = toRowObjects(deliveryRows).map(r => r.obj);
@@ -271,6 +277,25 @@
   document.getElementById('poTable').addEventListener('click', (e) => {
     const tr = e.target.closest('tr[data-id]');
     if (tr) openViewDialog(tr.dataset.id);
+  });
+
+  attachOrderHoverCard(document.getElementById('poTable'), 'tr[data-id]', tr => {
+    const po = poRowsData.find(r => r.obj.ID === tr.dataset.id);
+    if (!po) return null;
+    const o = po.obj;
+    return {
+      title: o.SUPPLIER, id: o.ID, status: o.STATUS || 'Ordered',
+      meta: [
+        `Ordered ${fmtDateShort(o['ORDER DATE'])}`,
+        `Expected ${fmtDateRange(o['EXPECTED START DATE'], o['EXPECTED END DATE'])}`,
+        o.NOTES ? `Note: ${o.NOTES}` : ''
+      ],
+      lines: polRowsData.filter(l => l.obj['PO ID'] === o.ID).map(l => ({
+        product: productOf(l.obj['PRODUCT CODE']),
+        name: productName(l.obj['PRODUCT CODE']),
+        qty: qtyUnit(l.obj['QTY ORDERED'], l.obj.UNIT)
+      }))
+    };
   });
 
   // ---- create PO ----
@@ -414,7 +439,7 @@
     const meta = productOrderMeta(p);
     const line = draftLines.find(l => l.code === code);
     const qty = line ? line.qty : 0;
-    const photoUrl = (p['Photo URL'] || '').toString().trim();
+    const photoUrl = productPhoto(p);
     const photoHtml = photoUrl
       ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">`
       : `<span class="cr-photo"></span>`;
@@ -564,7 +589,7 @@
     const isOrdered = po.obj.STATUS === 'Ordered' || !po.obj.STATUS;
     const itemsHtml = lines.map(l => `
       <tr>
-        <td>${escapeHtml(productName(l.obj['PRODUCT CODE']))}</td>
+        <td>${productCell(productOf(l.obj['PRODUCT CODE']), escapeHtml(productName(l.obj['PRODUCT CODE'])))}</td>
         <td class="num">${escapeHtml(l.obj['QTY ORDERED'])}</td>
         <td>${unitLabel(l.obj.UNIT)}</td>
         ${!isOrdered ? `<td class="num">${escapeHtml(l.obj['QTY RECEIVED'])}</td><td>${escapeHtml(l.obj['LOT NUMBER'])}</td><td>${escapeHtml(l.obj['BEST BEFORE DATE'])}</td>` : ''}
@@ -736,7 +761,7 @@
       const last = lj === l.lots.length - 1;
       return `
       <tr data-li="${li}" data-lj="${lj}">
-        ${first ? `<td rowspan="${l.lots.length}">${escapeHtml(l.name)}${l.isNew ? ' <span class="tag t-chill">Extra</span>' : ''}</td>` : ''}
+        ${first ? `<td rowspan="${l.lots.length}">${productCell(productOf(l.code), `${escapeHtml(l.name)}${l.isNew ? ' <span class="tag t-chill">Extra</span>' : ''}`)}</td>` : ''}
         <td class="num"><input type="number" step="any" data-f="qty" value="${escapeHtml(lot.qty)}" style="width:70px;"></td>
         ${first ? `<td rowspan="${l.lots.length}"><select data-f="unit" style="width:70px;"><option value="kg"${l.unit === 'kg' ? ' selected' : ''}>kg</option><option value="pc"${l.unit === 'pc' ? ' selected' : ''}>Pieces</option></select></td>` : ''}
         <td><input type="text" data-f="lot" value="${escapeHtml(lot.lot)}" placeholder="e.g. H-2831" style="width:110px;"></td>

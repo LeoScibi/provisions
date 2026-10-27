@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=25">
+<link rel="stylesheet" href="css/style.css?v=27">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -87,6 +87,7 @@
 <script src="js/sheets.js?v=3"></script>
 <script src="js/shell.js?v=1"></script>
 <script src="js/util.js?v=2"></script>
+<script src="js/product-ui.js?v=1"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
   let tokenClient = null;
@@ -206,6 +207,7 @@
       const products = toObjects(productRows);
       const productByCode = {};
       products.forEach(p => { productByCode[p['Product code']] = p; });
+      registerProducts(products);
 
       // Batches currently in stock — Deliveries minus Allocations per
       // product+lot, same computation as the Stock page.
@@ -235,8 +237,8 @@
 
       dash = {
         products, productByCode, batches, onHandByCode,
-        purchaseOrders: toObjects(poRows), poLineCountById,
-        orders: toObjects(orderRows), orderLineCountById
+        purchaseOrders: toObjects(poRows), poLineCountById, poLines: toObjects(polRows),
+        orders: toObjects(orderRows), orderLineCountById, orderLines: toObjects(lineRows)
       };
 
       renderWeekBand();
@@ -302,7 +304,7 @@
       return;
     }
     list.innerHTML = pos.map(po => `
-      <a class="lrow" href="purchase-orders.html">
+      <a class="lrow" href="purchase-orders.html" data-po-id="${escapeHtml(po.ID)}">
         <div class="lrow-body">
           <div class="lrow-name">${escapeHtml(po.SUPPLIER)} <span class="code" style="margin-left:6px;">${escapeHtml(po.ID)}</span></div>
           <div class="lrow-meta">${escapeHtml(fmtDateRange(po['EXPECTED START DATE'], po['EXPECTED END DATE']))} &middot; ${dash.poLineCountById[po.ID] || 0} item(s)</div>
@@ -333,7 +335,7 @@
     list.innerHTML = open.map(o => {
       const pending = (o.STATUS || 'New') === 'New';
       return `
-      <a class="lrow" href="orders.html?open=${encodeURIComponent(o.ID)}">
+      <a class="lrow" href="orders.html?open=${encodeURIComponent(o.ID)}" data-order-id="${escapeHtml(o.ID)}">
         <span class="lrow-icon ${pending ? 'pending' : 'confirmed'}">${pending ? ICON_CLOCK : ICON_CHECK}</span>
         <div class="lrow-body">
           <div class="lrow-name">${escapeHtml(o.CUSTOMER)}</div>
@@ -369,10 +371,9 @@
       const prod = dash.productByCode[b.code];
       return `
       <div class="arow">
-        <div>
+        ${productCell(prod, `
           <div class="arow-name">${escapeHtml(prod ? prod['Product name'] : b.code)}</div>
-          <div class="arow-sub code">Lot ${escapeHtml(b.batch)}</div>
-        </div>
+          <div class="arow-sub code">Lot ${escapeHtml(b.batch)}</div>`)}
         <span class="tag ${days <= 3 ? 't-crit' : 't-warn'}">${days}d left</span>
       </div>`;
     }).join('');
@@ -393,10 +394,9 @@
       const unit = p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc';
       return `
       <div class="arow">
-        <div>
+        ${productCell(p, `
           <div class="arow-name">${escapeHtml(p['Product name'])}</div>
-          <div class="arow-sub">${escapeHtml(p.Category || '')}</div>
-        </div>
+          <div class="arow-sub">${escapeHtml(p.Category || '')}</div>`)}
         <span class="tag t-warn">${onHand.toFixed(unit === 'kg' ? 1 : 0)}${unit === 'kg' ? 'kg' : ' ' + unitLabel(unit)} left</span>
       </div>`;
     }).join('');
@@ -405,6 +405,33 @@
   document.getElementById('wkPrev').addEventListener('click', () => { weekOffset--; renderWeekBand(); });
   document.getElementById('wkNext').addEventListener('click', () => { weekOffset++; renderWeekBand(); });
   document.getElementById('wkJump').addEventListener('click', (e) => { e.preventDefault(); weekOffset = 0; renderWeekBand(); });
+
+  const hoverLine = (code, qty, unit) => {
+    const prod = dash.productByCode[code];
+    return { product: prod, name: prod ? prod['Product name'] : code, qty: qtyUnit(qty, unit) };
+  };
+  attachOrderHoverCard(document.getElementById('upcomingList'), '[data-po-id]', el => {
+    const o = dash && dash.purchaseOrders.find(p => p.ID === el.dataset.poId);
+    if (!o) return null;
+    return {
+      title: o.SUPPLIER, id: o.ID, status: o.STATUS || 'Ordered',
+      meta: [`Expected ${fmtDateRange(o['EXPECTED START DATE'], o['EXPECTED END DATE'])}`, o.NOTES ? `Note: ${o.NOTES}` : ''],
+      lines: dash.poLines.filter(l => l['PO ID'] === o.ID).map(l => hoverLine(l['PRODUCT CODE'], l['QTY ORDERED'], l.UNIT))
+    };
+  });
+  attachOrderHoverCard(document.getElementById('custOrdersList'), '[data-order-id]', el => {
+    const o = dash && dash.orders.find(x => x.ID === el.dataset.orderId);
+    if (!o) return null;
+    return {
+      title: o.CUSTOMER, id: o.ID, status: o.STATUS || 'New',
+      meta: [
+        o['DELIVERY DATE'] ? `Delivery ${fmtDateShort(o['DELIVERY DATE'])}` : 'No delivery date set',
+        o['PLACED BY'] ? `Placed by ${o['PLACED BY']}` : '',
+        o.NOTES ? `Note: ${o.NOTES}` : ''
+      ],
+      lines: dash.orderLines.filter(l => l['ORDER ID'] === o.ID).map(l => hoverLine(l['PRODUCT CODE'], l['QTY ORDERED'], l.UNIT))
+    };
+  });
 
   window.addEventListener('load', () => {
     refreshSignedInUI();

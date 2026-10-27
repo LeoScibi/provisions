@@ -33,6 +33,11 @@ models, sheet schemas, or conventions between the two.
   `js/shell.js` and then resends the same request — so a save made after
   the token's hour is up completes once the user reconnects, with the page
   and any typed input untouched. New Drive/Sheets helpers must use it too.
+- **Product photos and order hover cards live in `js/product-ui.js`**: use
+  `productCell()`/`productThumb()` wherever a product is listed (call
+  `registerProducts()` after loading Products so cut portions borrow their
+  parent wheel's photo), and `attachOrderHoverCard()` for any list of
+  orders or POs.
 - Generic CRUD table framework in `js/crud-page.js` — every flat list page
   (Products, Suppliers, Customers) configures one `initCrudTable()` call
   instead of hand-rolling fetch/append/update/delete logic. Read the

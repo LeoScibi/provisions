@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=26">
+<link rel="stylesheet" href="css/style.css?v=27">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -43,6 +43,7 @@
 <script src="js/sheets.js?v=4"></script>
 <script src="js/shell.js?v=1"></script>
 <script src="js/util.js?v=2"></script>
+<script src="js/product-ui.js?v=1"></script>
 <script>
   let token = null;
   let weekOffset = 0;
@@ -137,7 +138,9 @@
       ]);
 
       const productByCode = {};
-      toObjects(productRows).forEach(p => { productByCode[p['Product code']] = p; });
+      const products = toObjects(productRows);
+      products.forEach(p => { productByCode[p['Product code']] = p; });
+      registerProducts(products);
 
       const deliveryByKey = {};
       toObjects(deliveryRows).forEach(d => {
@@ -224,6 +227,7 @@
         const qty = parseFloat(l['QTY ORDERED']) || 0;
         const nominal = parseFloat(prod['Nominal weight (kg)']) || 0;
         groups[parentCode].rows.push({
+          product: prod,
           portion: portion || prod['Product name'],
           code: prod['Product code'],
           qty, unit: l.UNIT,
@@ -255,6 +259,7 @@
       });
       const allocated = lots.reduce((s, x) => s + x.qty, 0);
       return {
+        product: prod,
         code: l['PRODUCT CODE'],
         name: prod ? prod['Product name'] : l['PRODUCT CODE'],
         qty: ordered, unit: l.UNIT,
@@ -311,7 +316,7 @@
               <tbody>${g.rows.map(r => `
                 <tr>
                   <td class="tick-col"><span class="tick-box"></span></td>
-                  <td><strong>${escapeHtml(r.portion)}</strong><br><span class="code">${escapeHtml(r.code)}</span></td>
+                  <td>${productCell(r.product, `<strong>${escapeHtml(r.portion)}</strong><br><span class="code">${escapeHtml(r.code)}</span>`)}</td>
                   <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}</td>
                   <td>${escapeHtml(r.customer)}</td>
                   <td>${zoneTag(r.zone)}</td>
@@ -374,7 +379,7 @@
           <tbody>${lines.length ? lines.map(l => `
             <tr${l.short ? ' style="background:var(--warn-bg);"' : ''}>
               <td class="tick-col"><span class="tick-box"></span></td>
-              <td><strong>${escapeHtml(l.name)}</strong><br><span class="code">${escapeHtml(l.code)}</span></td>
+              <td>${productCell(l.product, `<strong>${escapeHtml(l.name)}</strong><br><span class="code">${escapeHtml(l.code)}</span>`)}</td>
               <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
               <td>${l.isCut ? '<span class="tag t-chill">Cut piece · fridge</span>'
                 : l.lots.length ? l.lots.map(x => `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted" style="font-size:12px;">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
