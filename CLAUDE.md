@@ -102,6 +102,11 @@ models, sheet schemas, or conventions between the two.
 - **Deliveries** — goods-in, linked to Products by `PRODUCT CODE` and
   tracked by batch/lot number + best-before date. `PO ID` traces a row back
   to the purchase order it was received against, when there is one.
+- **Ordering cut cheese:** in the order product picker a whole and the
+  portions "Cut from" it are one row (`cutFamilies()` in `orders.html`),
+  stepped in the smallest piece; on save the count is split into real cuts,
+  largest first (3 × 1/16 → ⅛ + 1/16, 16 × 1/16 → the whole), each its own
+  OrderLines row in pieces (`expandDraftLines()`).
 - **Orders** / **OrderLines** / **Allocations** — order header (including
   `PLACED BY`, appended to Orders' headers), order lines, and stock
   allocated to each line. All three are managed entirely from

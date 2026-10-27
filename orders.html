@@ -63,6 +63,7 @@
   let purchaseOrders = [];  // PurchaseOrders — for what's arriving, shown in the product picker
   let poLines = [];         // PurchaseOrderLines
   let stockPos = {};        // computeStockPosition() result, refreshed each time the picker renders
+  let productGroups = [];   // ProductGroups — a cut product's display name
   let sheetIds = {};         // tab name -> sheetId, lazily populated (needed to delete an allocation row)
   let draftLines = [];       // working line items being staged — New Order wizard, or "add product" in the View dialog
   let activeSummaryId = 'ord_orderSummary'; // which dialog's summary element renderOrderSummary() writes to, set by renderProductPicker()
@@ -178,7 +179,8 @@
       customers = toRowObjects(customerRows).map(r => r.obj);
       products = toRowObjects(productRows).map(r => r.obj);
       registerProducts(products);
-      registerProductGroups(await groupsP);
+      productGroups = await groupsP;
+      registerProductGroups(productGroups);
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       allocationsData = toRowObjects(allocRows);
@@ -350,38 +352,168 @@
       purchaseOrders, poLines
     });
     const mount = form.querySelector(`#${mountId}`);
-    let orderProducts = products.filter(p => (p.Active || 'Yes') !== 'No' && !excludeCodes.includes(p['Product code']));
-    if (!orderProducts.length) {
+    const active = products.filter(p => (p.Active || 'Yes') !== 'No');
+    // A whole and the portions cut from it are one row (a "cut family");
+    // everything else is a row per SKU, as before.
+    const families = cutFamilies(active).filter(f => !f.portions.some(x => excludeCodes.includes(x.code)));
+    const inFamily = new Set(cutFamilies(active).flatMap(f => f.portions.map(x => x.code)));
+    let items = active
+      .filter(p => !excludeCodes.includes(p['Product code']) && !inFamily.has(p['Product code']))
+      .map(p => ({ kind: 'sku', p, name: p['Product name'], cat: p['Category'] || 'Uncategorised', codes: [p['Product code']] }))
+      .concat(families.map(f => ({ kind: 'family', f, name: f.name, cat: f.category || 'Uncategorised', codes: f.portions.flatMap(x => [x.code, x.p['Product name']]) })));
+    if (!items.length) {
       mount.innerHTML = `<div class="empty" style="padding:12px 0;">${excludeCodes.length ? 'Every active product is already on this order.' : 'No products set up yet.'}</div>`;
       renderOrderSummary();
       return;
     }
     const term = searchNorm((form.querySelector(`#${searchId}`).value || '').trim());
-    if (term) {
-      orderProducts = orderProducts.filter(p =>
-        searchMatch(p['Product name'], term) || searchMatch(p['Product code'], term));
-    }
-    if (!orderProducts.length) {
+    if (term) items = items.filter(it => searchMatch(it.name, term) || it.codes.some(c => searchMatch(c, term)));
+    if (!items.length) {
       mount.innerHTML = `<div class="empty" style="padding:12px 0;">No products match "${escapeHtml(term)}".</div>`;
       renderOrderSummary();
       return;
     }
     const byCategory = new Map();
-    orderProducts
-      .slice()
-      .sort((a, b) => a['Product name'].localeCompare(b['Product name']))
-      .forEach(p => {
-        const cat = p['Category'] || 'Uncategorised';
-        if (!byCategory.has(cat)) byCategory.set(cat, []);
-        byCategory.get(cat).push(p);
-      });
+    items.sort((a, b) => a.name.localeCompare(b.name)).forEach(it => {
+      if (!byCategory.has(it.cat)) byCategory.set(it.cat, []);
+      byCategory.get(it.cat).push(it);
+    });
     mount.innerHTML = [...byCategory.keys()].sort().map(cat => `
       <div class="cat-group">
         <div class="cat-group-head"><span class="g-name">${escapeHtml(cat)}</span><span class="g-count">${byCategory.get(cat).length}</span></div>
-        ${byCategory.get(cat).map(productPickerRowHtml).join('')}
+        ${byCategory.get(cat).map(it => it.kind === 'family' ? familyPickerRowHtml(it.f) : productPickerRowHtml(it.p)).join('')}
       </div>
     `).join('');
     renderOrderSummary();
+  }
+
+  // ---- cut families: a whole and the portions cut from it, ordered as one
+  // row in multiples of the smallest piece ----
+  //
+  // Each portion's size comes from its name ("1/16 wheel", "half",
+  // "quarter", "whole"), falling back to its nominal weight against the
+  // whole's. `units` = how many smallest pieces it is (Comté: whole 16, ¼ 4,
+  // ⅛ 2, 1/16 1). An order for N pieces is saved as real cuts, largest
+  // first — 3 × 1/16 becomes one ⅛ and one 1/16, 16 × 1/16 the whole wheel —
+  // each its own SKU line counted in pieces, so the cutting list shows what
+  // actually gets cut.
+
+  const FAMILY_PREFIX = 'fam:';
+
+  function portionFraction(p, wholeKg) {
+    const label = (p['Product name'] || '').split(' — ')[1] || '';
+    const frac = label.match(/(\d+)\s*\/\s*(\d+)/);
+    if (frac) return parseInt(frac[1], 10) / parseInt(frac[2], 10);
+    if (/\bwhole\b/i.test(label) || !p['Cut from (code)']) return 1;
+    if (/\bhalf\b/i.test(label)) return 1 / 2;
+    if (/\bquarter\b/i.test(label)) return 1 / 4;
+    const kg = parseFloat(p['Nominal weight (kg)']);
+    return kg && wholeKg ? kg / wholeKg : 1;
+  }
+
+  // "Comté Petite 10/14M — 1/16 wheel 2.3kg" → "1/16 wheel"
+  const portionLabel = p => ((p['Product name'] || '').split(' — ')[1] || p['Product name'] || '').replace(/\s+\d+(?:[.,]\d+)?\s*kg$/i, '').trim();
+
+  function cutFamilies(list) {
+    const byCode = Object.fromEntries(list.map(p => [p['Product code'], p]));
+    const fams = new Map();
+    list.filter(p => p['Cut from (code)']).forEach(p => {
+      const rootCode = p['Cut from (code)'];
+      if (!fams.has(rootCode)) fams.set(rootCode, { rootCode, root: byCode[rootCode] || productOf(rootCode) || null, members: [] });
+      fams.get(rootCode).members.push(p);
+    });
+    return [...fams.values()].map(f => {
+      const sellableRoot = f.root && byCode[f.rootCode] ? [f.root] : [];
+      const all = sellableRoot.concat(f.members);
+      const wholeKg = parseFloat(f.root?.['Nominal weight (kg)']) || 0;
+      const fracs = all.map(p => ({ p, code: p['Product code'], frac: portionFraction(p, wholeKg) }));
+      const smallest = Math.min(...fracs.map(x => x.frac));
+      const portions = fracs.map(x => ({ ...x, units: Math.max(1, Math.round(x.frac / smallest)), kg: parseFloat(x.p['Nominal weight (kg)']) || 0, label: portionLabel(x.p) }))
+        .sort((a, b) => b.units - a.units);
+      const small = portions[portions.length - 1];
+      const anyP = f.root || f.members[0];
+      const group = productGroups.find(g => g.ID && g.ID === anyP['Group ID']);
+      return {
+        code: FAMILY_PREFIX + f.rootCode, rootCode: f.rootCode, root: f.root, portions, small,
+        name: group?.['Product name'] || (anyP['Product name'] || '').split(' — ')[0],
+        category: anyP['Category'] || ''
+      };
+    });
+  }
+
+  function familyByCode(code) {
+    return cutFamilies(products.filter(p => (p.Active || 'Yes') !== 'No')).find(f => f.code === code);
+  }
+
+  // N smallest pieces as real cuts, largest first: [{ portion, count }].
+  function decompose(fam, units) {
+    let left = units;
+    const out = [];
+    fam.portions.forEach(x => {
+      const count = Math.floor(left / x.units);
+      if (count > 0) { out.push({ portion: x, count }); left -= count * x.units; }
+    });
+    return out;
+  }
+
+  function familyHint(fam, units) {
+    if (!units) return '';
+    const parts = decompose(fam, units);
+    const kg = parts.reduce((s, x) => s + x.count * x.portion.kg, 0);
+    return `= ${parts.map(x => `${x.count > 1 ? x.count + ' × ' : ''}${x.portion.label}`).join(' + ')}${kg ? ` · ≈ ${roundQty(kg)}kg` : ''}`;
+  }
+
+  function familyPickerRowHtml(fam) {
+    const line = draftLines.find(l => l.code === fam.code);
+    const units = line ? line.units : 0;
+    const photoUrl = productPhoto(fam.root || fam.small.p);
+    const photoHtml = photoUrl ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">` : `<span class="cr-photo"></span>`;
+    const subText = [(fam.root || fam.small.p)['Producer'], `Cut to order · in ${fam.small.label} pieces${fam.small.kg ? ` (${fam.small.kg}kg)` : ''}`].filter(Boolean).join(' · ');
+    const stockHtml = fam.root
+      ? stockPositionHtml(stockPos[fam.rootCode], productOrderMeta(fam.root).unit, 'Whole')
+      : '';
+    return `
+      <div class="cat-row picker-row" data-code="${escapeHtml(fam.code)}">
+        ${photoHtml}
+        <div class="cr-info">
+          <div class="cr-name-line"><span class="cr-name">${escapeHtml(fam.name)}</span></div>
+          <div class="cr-sub">${escapeHtml(subText)}</div>
+          ${stockHtml}
+        </div>
+        <div class="cr-stepper">
+          <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(fam.code)}" ${units <= 0 ? 'disabled' : ''} aria-label="Remove one piece">−</button>
+          <div class="stepper-qty">
+            <input type="number" class="stepper-qty-input" data-code="${escapeHtml(fam.code)}" value="${units || ''}" placeholder="0" min="0" step="1">
+            <span class="stepper-unit-suffix">× ${escapeHtml(fam.small.label)}</span>
+            <span class="stepper-sub">${escapeHtml(familyHint(fam, units))}</span>
+          </div>
+          <button type="button" class="stepper-btn" data-step="1" data-code="${escapeHtml(fam.code)}" aria-label="Add one piece">+</button>
+        </div>
+      </div>`;
+  }
+
+  function setFamilyUnits(fam, units, opts = {}) {
+    units = Math.max(0, Math.round(units));
+    const line = draftLines.find(l => l.code === fam.code);
+    if (!units) draftLines = draftLines.filter(l => l.code !== fam.code);
+    else if (line) line.units = units;
+    else draftLines.push({ code: fam.code, name: fam.name, units, family: true });
+    const row = form.querySelector(`.picker-row[data-code="${CSS.escape(fam.code)}"]`);
+    if (row) {
+      if (!opts.skipInputValue) row.querySelector('.stepper-qty-input').value = units || '';
+      row.querySelector('.stepper-sub').textContent = familyHint(fam, units);
+      row.querySelector('[data-step="-1"]').disabled = units <= 0;
+    }
+    renderOrderSummary();
+  }
+
+  // What actually gets saved: cut families turned into their real cuts.
+  function expandDraftLines() {
+    return draftLines.flatMap(l => {
+      if (!l.family) return [l];
+      const fam = familyByCode(l.code);
+      return fam ? decompose(fam, l.units).map(x => ({ code: x.portion.code, name: x.portion.p['Product name'], qty: x.count, unit: 'pc' })) : [];
+    });
   }
 
   function renderOrderSummary() {
@@ -474,6 +606,12 @@
   }
 
   function adjustDraftQty(code, dir) {
+    if (code.startsWith(FAMILY_PREFIX)) {
+      const fam = familyByCode(code);
+      const line = draftLines.find(l => l.code === code);
+      if (fam) setFamilyUnits(fam, (line ? line.units : 0) + dir);
+      return;
+    }
     const p = products.find(pr => pr['Product code'] === code);
     if (!p) return;
     const meta = productOrderMeta(p);
@@ -488,6 +626,12 @@
   // typed number is a case count (converted to the tracked unit); otherwise
   // it's the tracked unit itself (kg allows decimals, e.g. 1.6).
   function handleQtyInput(code) {
+    if (code.startsWith(FAMILY_PREFIX)) {
+      const fam = familyByCode(code);
+      const input = form.querySelector(`.picker-row[data-code="${CSS.escape(code)}"] .stepper-qty-input`);
+      if (fam && input) setFamilyUnits(fam, parseFloat(input.value) || 0, { skipInputValue: true });
+      return;
+    }
     const p = products.find(pr => pr['Product code'] === code);
     if (!p) return;
     const meta = productOrderMeta(p);
@@ -540,7 +684,7 @@
 
       const existingLines = await sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token);
       let base = existingLines.length ? existingLines : [['ID']];
-      const lineRows = draftLines.map(l => {
+      const lineRows = expandDraftLines().map(l => {
         const lineId = nextId(base, 'OL');
         base = base.concat([[lineId]]);
         return [lineId, orderId, l.code, l.qty, l.unit, 'New', ''];
@@ -789,7 +933,7 @@
     try {
       const existingLines = await sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token);
       let base = existingLines.length ? existingLines : [['ID']];
-      const lineRows = draftLines.map(l => {
+      const lineRows = expandDraftLines().map(l => {
         const lineId = nextId(base, 'OL');
         base = base.concat([[lineId]]);
         return [lineId, order.obj.ID, l.code, l.qty, l.unit, 'New', ''];
