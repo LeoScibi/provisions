@@ -28,6 +28,7 @@
       <button type="button" class="btn add-btn sm" id="newOrderBtn" style="margin:0;">+ Add order</button>
       <button type="button" class="btn ghost sm" id="reloadBtn" style="margin:0;">Reload</button>
     </div>
+    <div class="cat-tabs" id="statusTabs" role="tablist" aria-label="Filter by status" style="margin-bottom:12px; width:fit-content; max-width:100%;"></div>
     <div class="panel"><div class="scroll" style="overflow-x:auto;">
       <table id="ordersTable">
         <thead><tr><th>ID</th><th>Customer</th><th>Delivery date</th><th>Status</th><th>Placed by</th><th class="num">Items</th></tr></thead>
@@ -193,19 +194,56 @@
     }
   }
 
+  // Newest first: latest delivery date, then latest order date, then the
+  // highest ID. Orders with no delivery date sit at the top — they need one.
   function sortOrders(list) {
-    return [...list].sort((a, b) => (a.obj['DELIVERY DATE'] || '9999').localeCompare(b.obj['DELIVERY DATE'] || '9999'));
+    return [...list].sort((a, b) =>
+      (b.obj['DELIVERY DATE'] || '9999').localeCompare(a.obj['DELIVERY DATE'] || '9999')
+      || (b.obj.DATE || '').localeCompare(a.obj.DATE || '')
+      || b.obj.ID.localeCompare(a.obj.ID, undefined, { numeric: true }));
   }
+
+  // Status filter above the table: All, Open (anything not dispatched yet),
+  // then each status. Remembered per browser.
+  const STATUS_FILTER_KEY = 'provisions_ordersStatusFilter';
+  let statusFilter = (() => { try { return localStorage.getItem(STATUS_FILTER_KEY) || 'All'; } catch (e) { return 'All'; } })();
+  const statusOf = o => o.STATUS || 'New';
+  const matchesFilter = (o, f) => f === 'All' || (f === 'Open' ? statusOf(o) !== 'Dispatched' : statusOf(o) === f);
+
+  function renderStatusTabs() {
+    const filters = ['All', 'Open', ...ORDER_STATUSES];
+    if (!filters.includes(statusFilter)) statusFilter = 'All';
+    document.getElementById('statusTabs').innerHTML = filters.map(f => `
+      <button type="button" class="cat-tab${statusFilter === f ? ' active' : ''}" data-status-filter="${f}" role="tab" aria-selected="${statusFilter === f}">
+        ${f}<span class="n">${ordersData.filter(r => matchesFilter(r.obj, f)).length}</span>
+      </button>`).join('');
+  }
+
+  document.getElementById('statusTabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-status-filter]');
+    if (!b) return;
+    statusFilter = b.dataset.statusFilter;
+    try { localStorage.setItem(STATUS_FILTER_KEY, statusFilter); } catch (err) {}
+    renderTable();
+  });
 
   function renderTable() {
     const tbody = document.querySelector('#ordersTable tbody');
+    renderStatusTabs();
     if (!ordersData.length) {
       tbody.innerHTML = `<tr><td colspan="6" class="empty" style="padding:18px;">No orders yet.</td></tr>`;
       return;
     }
-    tbody.innerHTML = sortOrders(ordersData).map(r => {
+    const shown = ordersData.filter(r => matchesFilter(r.obj, statusFilter));
+    if (!shown.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty" style="padding:18px;">No ${escapeHtml(statusFilter.toLowerCase())} orders.</td></tr>`;
+      return;
+    }
+    const lineCount = {};
+    orderLinesData.forEach(l => { lineCount[l.obj['ORDER ID']] = (lineCount[l.obj['ORDER ID']] || 0) + 1; });
+    tbody.innerHTML = sortOrders(shown).map(r => {
       const o = r.obj;
-      const itemCount = orderLinesData.filter(l => l.obj['ORDER ID'] === o.ID).length;
+      const itemCount = lineCount[o.ID] || 0;
       return `<tr data-id="${escapeHtml(o.ID)}" style="cursor:pointer;">
         <td class="code">${escapeHtml(o.ID)}</td>
         <td>${escapeHtml(o.CUSTOMER)}</td>
