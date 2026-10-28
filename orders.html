@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=35">
+<link rel="stylesheet" href="css/style.css?v=36">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -39,12 +39,16 @@
   </div>
 </main>
 
+<!-- Allocate / Replace pop-ups, opened on top of the order dialog. -->
+<dialog id="allocDialog" class="sub-dialog"><form method="dialog" id="allocForm"></form></dialog>
+<dialog id="replaceDialog" class="sub-dialog"><form method="dialog" id="replaceForm"></form></dialog>
+
 <dialog id="orderDialog">
   <form id="orderForm"></form>
 </dialog>
 
 <script src="js/config.js?v=4"></script>
-<script src="js/sheets.js?v=3"></script>
+<script src="js/sheets.js?v=4"></script>
 <script src="js/shell.js?v=6"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=2"></script>
@@ -68,7 +72,7 @@
   let sheetIds = {};         // tab name -> sheetId, lazily populated (needed to delete an allocation row)
   let draftLines = [];       // working line items being staged — New Order wizard, or "add product" in the View dialog
   let activeSummaryId = 'ord_orderSummary'; // which dialog's summary element renderOrderSummary() writes to, set by renderProductPicker()
-  let expandedLineId = null; // which order line's allocation panel is open in the View dialog
+  let lineHeaders = [];      // OrderLines' header row — where REPLACES lives
   let dirtyCheck = null;     // set per dialog mode; attachDiscardGuard calls it via a stable wrapper
 
   const statusEl = document.getElementById('status');
@@ -184,6 +188,7 @@
       registerProductGroups(productGroups);
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
+      lineHeaders = lineRows[0] || [];
       allocationsData = toRowObjects(allocRows);
       deliveriesData = toRowObjects(deliveryRows);
       renderTable();
@@ -745,7 +750,6 @@
   function openViewDialog(orderId) {
     const order = ordersData.find(r => r.obj.ID === orderId);
     if (!order) return;
-    expandedLineId = null;
     renderViewForm(order);
     dialogEl.showModal();
     guard.arm();
@@ -776,9 +780,13 @@
         </div>
         ${order.obj.NOTES ? `<div class="field"><label>Notes</label><div>${escapeHtml(order.obj.NOTES)}</div></div>` : ''}
 
+        <div class="alloc-bar">
+          <span class="alloc-summary">${escapeHtml(allocSummary(lines))}</span>
+          <button type="button" class="btn sm" id="ord_allocAllBtn"${canAllocateAll(lines) ? '' : ' disabled'} title="Allocate every line from the earliest best-before first, as far as stock allows">Allocate all</button>
+        </div>
         <table class="form" id="ord_viewLinesTable">
-          <thead><tr><th>Product</th><th class="num">Ordered</th><th class="num">Allocated</th><th>Status</th><th></th></tr></thead>
-          <tbody>${lines.length ? lines.map(l => renderLineRow(l)).join('') : `<tr><td colspan="5" class="empty" style="padding:12px;">No items on this order.</td></tr>`}</tbody>
+          <thead><tr><th>Product</th><th class="num">Ordered</th><th class="num">Available</th><th class="num">Allocated</th><th>Status</th><th></th></tr></thead>
+          <tbody>${lines.length ? lines.map(l => renderLineRow(l)).join('') : `<tr><td colspan="6" class="empty" style="padding:12px;">No items on this order.</td></tr>`}</tbody>
         </table>
 
         <div class="field" style="margin-top:12px;">
@@ -816,86 +824,326 @@
       if (e.target.closest('#ord_view_addLinesBtn')) { handleAddLinesToOrder(order); return; }
       const stepBtn = e.target.closest('[data-step]');
       if (stepBtn) { adjustDraftQty(stepBtn.dataset.code, parseInt(stepBtn.dataset.step, 10)); return; }
-      const toggleBtn = e.target.closest('[data-toggle-alloc]');
-      if (toggleBtn) {
-        const lineId = toggleBtn.dataset.toggleAlloc;
-        expandedLineId = expandedLineId === lineId ? null : lineId;
-        renderViewForm(order);
-        return;
-      }
-      const allocBtn = e.target.closest('[data-allocate-line]');
-      if (allocBtn) { handleAllocate(order, allocBtn.dataset.allocateLine); return; }
-      const rmAllocBtn = e.target.closest('[data-remove-alloc]');
-      if (rmAllocBtn) { handleRemoveAllocation(order, rmAllocBtn.dataset.removeAlloc); return; }
+      if (e.target.closest('#ord_allocAllBtn')) { handleAllocateAll(order); return; }
+      const allocBtn = e.target.closest('[data-open-alloc]');
+      if (allocBtn) { openAllocDialog(order, allocBtn.dataset.openAlloc); return; }
+      const replaceBtn = e.target.closest('[data-open-replace]');
+      if (replaceBtn) { openReplaceDialog(order, replaceBtn.dataset.openReplace); return; }
       const rmLineBtn = e.target.closest('[data-remove-line]');
       if (rmLineBtn) { handleRemoveLine(order, rmLineBtn.dataset.removeLine); return; }
     };
   }
 
+  // ---- allocation: per line, in a pop-up, or all at once ----
+  //
+  // A cut-to-order line (a portion "Cut from" a whole) takes no allocation
+  // of its own — it's cut from a wheel at the bench — so it's shown as such
+  // and never holds the order back from Allocated.
+
+  const isCutLine = l => { const p = productOf(l['PRODUCT CODE']); return !!(p && p['Cut from (code)']); };
+  const allocatedFor = lineId => allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId)
+    .reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
+  const outstandingFor = l => Math.max(0, roundQty((parseFloat(l['QTY ORDERED']) || 0) - allocatedFor(l.ID)));
+  const freeStock = code => roundQty(computeAvailableBatches(code).reduce((s, b) => s + b.remaining, 0));
+  const fmtQty = (n, unit) => qtyUnit(roundQty(n), unit);
+
+  function allocSummary(lines) {
+    const need = lines.filter(l => !isCutLine(l.obj));
+    const ready = need.filter(l => outstandingFor(l.obj) <= 0.0001).length;
+    const cut = lines.length - need.length;
+    return `${ready} of ${need.length} line(s) allocated${cut ? ` · ${cut} cut to order` : ''}`;
+  }
+  const canAllocateAll = lines => lines.some(l => !isCutLine(l.obj) && outstandingFor(l.obj) > 0.0001 && freeStock(l.obj['PRODUCT CODE']) > 0.0001);
+
   function renderLineRow(line) {
     const l = line.obj;
-    const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID);
-    const allocatedQty = allocs.reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
+    const code = l['PRODUCT CODE'];
     const ordered = parseFloat(l['QTY ORDERED']) || 0;
-    const ready = allocatedQty + 0.0001 >= ordered;
-    const isExpanded = expandedLineId === l.ID;
-    const statusBadge = ready ? '<span class="tag t-ok">Ready</span>' : (allocatedQty > 0 ? '<span class="tag t-warn">Partial</span>' : '<span class="tag t-crit">Unallocated</span>');
-
-    const row = `
+    const replaced = l.REPLACES ? `<div class="replaced-note">Replaces ${escapeHtml(productName(l.REPLACES))}</div>` : '';
+    const nameCell = productCell(productOf(code), `${escapeHtml(productName(code))}<br><span class="code">${escapeHtml(code)}</span>${replaced}`);
+    if (isCutLine(l)) {
+      return `
+        <tr>
+          <td>${nameCell}</td>
+          <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
+          <td class="num muted">—</td>
+          <td class="num muted">—</td>
+          <td><span class="tag t-chill">Cut to order</span></td>
+          <td class="line-actions"><button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button></td>
+        </tr>`;
+    }
+    const allocated = allocatedFor(l.ID);
+    const outstanding = outstandingFor(l);
+    const free = freeStock(code);
+    const ready = outstanding <= 0.0001;
+    const short = !ready && free + 0.0001 < outstanding;
+    const statusBadge = ready ? '<span class="tag t-ok">Ready</span>' : (allocated > 0 ? '<span class="tag t-warn">Partial</span>' : '<span class="tag t-crit">Unallocated</span>');
+    return `
       <tr>
-        <td>${productCell(productOf(l['PRODUCT CODE']), `${escapeHtml(productName(l['PRODUCT CODE']))}<br><span class="code">${escapeHtml(l['PRODUCT CODE'])}</span>`)}</td>
+        <td>${nameCell}</td>
         <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
-        <td class="num">${allocatedQty.toFixed(2)} ${unitLabel(l.UNIT)}</td>
+        <td class="num ${short ? 'neg' : ''}" title="${short ? 'Not enough free stock to fill this line' : 'Free stock not yet allocated to any order'}">${escapeHtml(fmtQty(free, l.UNIT))}</td>
+        <td class="num">${escapeHtml(fmtQty(allocated, l.UNIT))}</td>
         <td>${statusBadge}</td>
-        <td style="white-space:nowrap;">
-          <button type="button" class="btn ghost sm" data-toggle-alloc="${escapeHtml(l.ID)}">${isExpanded ? 'Close' : 'Allocate'}</button>
+        <td class="line-actions">
+          <button type="button" class="btn ghost sm" data-open-alloc="${escapeHtml(l.ID)}">${ready ? 'Lots' : 'Allocate'}</button>
+          <button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>
           <button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button>
         </td>
-      </tr>
-    `;
-    if (!isExpanded) return row;
-    return row + `<tr><td colspan="5" style="background:var(--paper); padding:14px;">${renderAllocationPanel(line, allocs)}</td></tr>`;
+      </tr>`;
   }
 
-  function renderAllocationPanel(line, allocs) {
-    const l = line.obj;
-    const batches = computeAvailableBatches(l['PRODUCT CODE']);
-    const alreadyAllocated = allocs.reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
-    const outstanding = Math.max((parseFloat(l['QTY ORDERED']) || 0) - alreadyAllocated, 0);
+  // FEFO split of `qty` over a product's free lots: [{ batch, bbe, take }].
+  function fefoPlan(code, qty, pool) {
+    const out = [];
+    let left = qty;
+    (pool || computeAvailableBatches(code)).forEach(b => {
+      if (left <= 0.0001) return;
+      const take = roundQty(Math.min(left, b.remaining));
+      if (take > 0) { out.push({ batch: b.batch, bbe: b.bbe, take }); left = roundQty(left - take); }
+    });
+    return out;
+  }
 
-    const existingHtml = allocs.length ? `
-      <table class="form" style="margin-bottom:10px;">
-        <thead><tr><th>Lot</th><th>Best before</th><th class="num">Qty</th><th></th></tr></thead>
-        <tbody>${allocs.map(a => `
-          <tr>
-            <td class="code">${escapeHtml(a.obj['BATCH/LOT NUMBER'])}</td>
-            <td>${escapeHtml(fmtDateShort(deliveryBbeFor(l['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']))) || '—'}</td>
-            <td class="num">${escapeHtml(a.obj['QTY ALLOCATED'])} ${unitLabel(l.UNIT)}</td>
-            <td><button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button></td>
-          </tr>
-        `).join('')}</tbody>
-      </table>
-    ` : '';
+  async function appendAllocations(cfg, rows) {
+    const existing = await sheetsGet(cfg.spreadsheetId, 'Allocations!A:A', token);
+    let base = existing.length ? existing : [['ID']];
+    const values = rows.map(r => {
+      const id = nextId(base, 'ALO');
+      base = base.concat([[id]]);
+      return [id, r.lineId, r.code, r.batch, r.qty, todayIso()];
+    });
+    await sheetsAppendRows(cfg.spreadsheetId, 'Allocations!A:F', values, token);
+  }
 
-    const pickerHtml = batches.length ? `
-      <div class="inline">
-        <div class="field" style="flex:2; margin-bottom:0;">
-          <select data-line-batch="${escapeHtml(l.ID)}">
-            ${batches.map((b, i) => `<option value="${escapeHtml(b.batch)}"${i === 0 ? ' selected' : ''}>${escapeHtml(b.batch)} — ${b.remaining.toFixed(2)} ${unitLabel(b.unit)} left, BBE ${escapeHtml(fmtDateShort(b.bbe)) || 'unknown'}${i === 0 ? ' (earliest — suggested)' : ''}</option>`).join('')}
-          </select>
+  async function handleAllocateAll(order) {
+    const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && !isCutLine(l.obj));
+    // One shared pool per product, so two lines of the same product don't
+    // both claim the same lot.
+    const pools = {};
+    const rows = [];
+    lines.forEach(({ obj: l }) => {
+      const code = l['PRODUCT CODE'];
+      const pool = pools[code] = pools[code] || computeAvailableBatches(code).map(b => ({ ...b }));
+      fefoPlan(code, outstandingFor(l), pool).forEach(x => {
+        rows.push({ lineId: l.ID, code, batch: x.batch, qty: x.take });
+        pool.find(b => b.batch === x.batch).remaining -= x.take;
+      });
+    });
+    if (!rows.length) { setDlgStatus('Nothing more can be allocated from the stock in hand.', 'error'); return; }
+    const cfg = await ensureAuth(setDlgStatus);
+    if (!cfg) return;
+    setDlgStatus('Allocating…');
+    try {
+      await appendAllocations(cfg, rows);
+      await refreshAfterAllocationChange(order.obj.ID);
+      const left = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && !isCutLine(l.obj) && outstandingFor(l.obj) > 0.0001).length;
+      setDlgStatus(left ? `Allocated what's in stock — ${left} line(s) still short. Use Replace to swap them.` : 'Every line is allocated.', left ? 'error' : 'ok');
+    } catch (err) {
+      setDlgStatus('Error: ' + err.message, 'error');
+    }
+  }
+
+  // ---- the Allocate pop-up ----
+  const allocDialog = document.getElementById('allocDialog');
+  const allocForm = document.getElementById('allocForm');
+
+  function openAllocDialog(order, lineId) {
+    const line = orderLinesData.find(l => l.obj.ID === lineId);
+    if (!line) return;
+    const l = line.obj, code = l['PRODUCT CODE'];
+    const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId);
+    const outstanding = outstandingFor(l);
+    const lots = computeAvailableBatches(code);
+    const plan = Object.fromEntries(fefoPlan(code, outstanding, lots).map(x => [x.batch, x.take]));
+    const days = d => d ? Math.round((new Date(d + 'T00:00:00') - new Date(todayIso() + 'T00:00:00')) / 864e5) : null;
+    allocForm.innerHTML = `
+      <div class="dlg-h">
+        <div>
+          <div class="ttl" style="font-size:22px;">${escapeHtml(productName(code))}</div>
+          <div class="subtitle">${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))} · allocated ${escapeHtml(fmtQty(allocatedFor(lineId), l.UNIT))} · still needed <strong>${escapeHtml(fmtQty(outstanding, l.UNIT))}</strong></div>
         </div>
-        <div class="field" style="max-width:100px; margin-bottom:0;">
-          <input type="number" step="any" data-line-qty="${escapeHtml(l.ID)}" placeholder="Qty" value="${Math.min(outstanding, batches[0].remaining).toFixed(2)}">
-        </div>
-        <button type="button" class="btn ghost sm" data-allocate-line="${escapeHtml(l.ID)}">+ Allocate</button>
+        <button type="button" class="dlg-close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
-    ` : `<p class="muted" style="font-size:13px;">No stock available for this product yet.</p>`;
+      <div class="dlg-b">
+        ${allocs.length ? `
+          <div class="sub-h">Allocated</div>
+          <table class="form" style="margin-bottom:16px;"><thead><tr><th>Lot</th><th>Best before</th><th class="num">Qty</th><th></th></tr></thead>
+          <tbody>${allocs.map(a => `<tr>
+            <td class="code">${escapeHtml(a.obj['BATCH/LOT NUMBER'])}</td>
+            <td>${escapeHtml(fmtDateShort(deliveryBbeFor(a.obj['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']))) || '—'}</td>
+            <td class="num">${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, l.UNIT))}</td>
+            <td class="line-actions"><button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button></td>
+          </tr>`).join('')}</tbody></table>` : ''}
+        <div class="sub-h">Free stock · earliest best-before first</div>
+        ${lots.length ? `
+          <table class="form"><thead><tr><th>Lot</th><th>Best before</th><th class="num">Free</th><th class="num">Take</th></tr></thead>
+          <tbody>${lots.map(b => { const d = days(b.bbe); return `<tr>
+            <td class="code">${escapeHtml(b.batch)}</td>
+            <td>${escapeHtml(fmtDateShort(b.bbe)) || '—'} ${d !== null && d < 14 ? `<span class="tag ${d < 7 ? 't-crit' : 't-warn'}">${d < 0 ? 'past' : d + 'd'}</span>` : ''}</td>
+            <td class="num">${escapeHtml(fmtQty(b.remaining, b.unit))}</td>
+            <td class="num"><input type="number" step="any" min="0" max="${b.remaining}" data-take="${escapeHtml(b.batch)}" value="${plan[b.batch] || ''}" placeholder="0" class="take-input"></td>
+          </tr>`; }).join('')}</tbody></table>`
+          : `<div class="note">No free stock of this product. Replace it with something in stock, or wait for a delivery.</div>`}
+        <div id="allocStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-replace-instead style="margin-right:auto;">Replace instead…</button>
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        ${lots.length ? `<button type="button" class="btn" id="allocSaveBtn">Allocate</button>` : ''}
+      </div>`;
+    const updateTotal = () => {
+      const btn = allocForm.querySelector('#allocSaveBtn');
+      if (!btn) return;
+      const total = [...allocForm.querySelectorAll('[data-take]')].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      btn.textContent = total > 0 ? `Allocate ${fmtQty(total, l.UNIT)}` : 'Allocate';
+      btn.disabled = total <= 0;
+    };
+    updateTotal();
+    allocForm.oninput = updateTotal;
+    allocForm.onclick = async (e) => {
+      if (e.target.closest('[data-close]')) { allocDialog.close(); return; }
+      if (e.target.closest('[data-replace-instead]')) { allocDialog.close(); openReplaceDialog(order, lineId); return; }
+      const rm = e.target.closest('[data-remove-alloc]');
+      if (rm) { allocDialog.close(); await handleRemoveAllocation(order, rm.dataset.removeAlloc); openAllocDialog(ordersData.find(r => r.obj.ID === order.obj.ID) || order, lineId); return; }
+      if (e.target.closest('#allocSaveBtn')) saveAllocDialog(order, l, lots);
+    };
+    allocDialog.showModal();
+  }
 
-    return `
-      <div style="font-family:'Roboto Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--steel); margin-bottom:8px;">Allocate stock — ${escapeHtml(productName(l['PRODUCT CODE']))}</div>
-      ${existingHtml}
-      ${pickerHtml}
-    `;
+  async function saveAllocDialog(order, l, lots) {
+    const status = allocForm.querySelector('#allocStatus');
+    const rows = [];
+    for (const input of allocForm.querySelectorAll('[data-take]')) {
+      const qty = roundQty(parseFloat(input.value) || 0);
+      if (qty <= 0) continue;
+      const lot = lots.find(b => b.batch === input.dataset.take);
+      if (qty > lot.remaining + 0.0001) { status.textContent = `Lot ${lot.batch} only has ${fmtQty(lot.remaining, lot.unit)} free.`; status.style.color = 'var(--crit)'; return; }
+      rows.push({ lineId: l.ID, code: l['PRODUCT CODE'], batch: lot.batch, qty });
+    }
+    if (!rows.length) return;
+    const cfg = await ensureAuth(setDlgStatus);
+    if (!cfg) return;
+    status.textContent = 'Allocating…';
+    try {
+      await appendAllocations(cfg, rows);
+      allocDialog.close();
+      await refreshAfterAllocationChange(order.obj.ID);
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message; status.style.color = 'var(--crit)';
+    }
+  }
+
+  // ---- the Replace pop-up ----
+  //
+  // Swaps a line's product for another (e.g. one with stock). The line keeps
+  // the code it originally had in REPLACES — so delivery notes and packing
+  // slips can say what it stands in for — its old allocations are released,
+  // and the new product is allocated FEFO straight away as far as stock
+  // allows. Cut-to-order products aren't offered: a replacement is picked,
+  // not cut, so the cutting list never changes.
+  const replaceDialog = document.getElementById('replaceDialog');
+  const replaceForm = document.getElementById('replaceForm');
+
+  function openReplaceDialog(order, lineId) {
+    const line = orderLinesData.find(l => l.obj.ID === lineId);
+    if (!line) return;
+    const l = line.obj, code = l['PRODUCT CODE'];
+    const current = productOf(code) || {};
+    let chosen = null;
+    const candidates = products.filter(p => (p.Active || 'Yes') !== 'No' && p['Product code'] !== code && !p['Cut from (code)'])
+      .map(p => ({ p, free: freeStock(p['Product code']), same: (p['Group ID'] && p['Group ID'] === current['Group ID']) || p.Category === current.Category }));
+    replaceForm.innerHTML = `
+      <div class="dlg-h">
+        <div>
+          <div class="ttl" style="font-size:22px;">Replace ${escapeHtml(productName(code))}</div>
+          <div class="subtitle">${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))}${l.REPLACES ? ` · already replacing ${escapeHtml(productName(l.REPLACES))}` : ''}</div>
+        </div>
+        <button type="button" class="dlg-close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="dlg-b">
+        <input type="search" id="rpl_search" placeholder="Search products by name or code…" style="margin-bottom:10px;">
+        <div id="rpl_list" class="rpl-list"></div>
+        <div class="rpl-qty" id="rpl_qtyRow" hidden>
+          <label for="rpl_qty">Quantity of the replacement</label>
+          <div style="display:flex; align-items:center; gap:8px;"><input type="number" step="any" min="0" id="rpl_qty" style="width:110px;"><span id="rpl_unit" class="muted"></span></div>
+        </div>
+        <div id="rplStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="button" class="btn" id="rplSaveBtn" disabled>Replace</button>
+      </div>`;
+    const unitFor = p => p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc';
+    const renderList = () => {
+      const term = searchNorm(replaceForm.querySelector('#rpl_search').value.trim());
+      const list = candidates
+        .filter(c => !term || searchMatch(c.p['Product name'], term) || searchMatch(c.p['Product code'], term))
+        .sort((a, b) => (b.free > 0) - (a.free > 0) || b.same - a.same || a.p['Product name'].localeCompare(b.p['Product name']))
+        .slice(0, term ? 60 : 30);
+      replaceForm.querySelector('#rpl_list').innerHTML = list.length ? list.map(c => `
+        <button type="button" class="rpl-row${chosen === c.p['Product code'] ? ' on' : ''}" data-pick="${escapeHtml(c.p['Product code'])}">
+          ${productThumb(c.p, 'xs')}
+          <span class="rpl-name">${escapeHtml(c.p['Product name'])}<span class="code"> ${escapeHtml(c.p['Product code'])}</span></span>
+          <span class="rpl-free ${c.free > 0 ? '' : 'neg'}">${c.free > 0 ? escapeHtml(fmtQty(c.free, unitFor(c.p))) + ' free' : 'none free'}</span>
+        </button>`).join('') : '<div class="muted" style="padding:10px 0; font-size:13px;">No products match.</div>';
+    };
+    renderList();
+    replaceForm.querySelector('#rpl_search').addEventListener('input', renderList);
+    replaceForm.onclick = (e) => {
+      if (e.target.closest('[data-close]')) { replaceDialog.close(); return; }
+      const pickBtn = e.target.closest('[data-pick]');
+      if (pickBtn) {
+        chosen = pickBtn.dataset.pick;
+        const p = productOf(chosen);
+        replaceForm.querySelector('#rpl_qtyRow').hidden = false;
+        const qtyInput = replaceForm.querySelector('#rpl_qty');
+        if (!qtyInput.value) qtyInput.value = parseFloat(l['QTY ORDERED']) || '';
+        replaceForm.querySelector('#rpl_unit').textContent = unitLabel(unitFor(p));
+        const btn = replaceForm.querySelector('#rplSaveBtn');
+        btn.disabled = false;
+        btn.textContent = `Replace with ${p['Product name']}`;
+        renderList();
+        return;
+      }
+      if (e.target.closest('#rplSaveBtn')) saveReplacement(order, line, chosen);
+    };
+    replaceDialog.showModal();
+    replaceForm.querySelector('#rpl_search').focus();
+  }
+
+  async function saveReplacement(order, line, newCode) {
+    const status = replaceForm.querySelector('#rplStatus');
+    const p = productOf(newCode);
+    const qty = roundQty(parseFloat(replaceForm.querySelector('#rpl_qty').value) || 0);
+    if (!p || qty <= 0) { status.textContent = 'Pick a product and a quantity.'; status.style.color = 'var(--crit)'; return; }
+    const replacesIdx = lineHeaders.indexOf('REPLACES');
+    if (replacesIdx < 0) { status.textContent = 'Re-run Setup first — it adds the REPLACES column to OrderLines.'; status.style.color = 'var(--crit)'; return; }
+    const cfg = await ensureAuth(setDlgStatus);
+    if (!cfg) return;
+    status.textContent = 'Replacing…';
+    const l = line.obj;
+    const unit = p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc';
+    try {
+      // Release the old product's allocations first.
+      const oldAllocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID);
+      if (oldAllocs.length) {
+        const sid = await ensureSheetId(cfg, 'Allocations');
+        await sheetsBatchUpdate(cfg.spreadsheetId, buildDeleteRowRequests(sid, oldAllocs.map(a => a.rowNumber)), token);
+      }
+      await sheetsBatchUpdateValues(cfg.spreadsheetId, [
+        { range: `OrderLines!C${line.rowNumber}:E${line.rowNumber}`, values: [[newCode, qty, unit]] },
+        { range: `OrderLines!${colLetter(replacesIdx + 1)}${line.rowNumber}`, values: [[l.REPLACES || l['PRODUCT CODE']]] }
+      ], token);
+      // Allocate the replacement from what's free, earliest best-before first.
+      const plan = fefoPlan(newCode, qty);
+      if (plan.length) await appendAllocations(cfg, plan.map(x => ({ lineId: l.ID, code: newCode, batch: x.batch, qty: x.take })));
+      replaceDialog.close();
+      await refreshAfterAllocationChange(order.obj.ID);
+      setDlgStatus(`Replaced with ${p['Product name']}.`, 'ok');
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message; status.style.color = 'var(--crit)';
+    }
   }
 
   // Available lots for a product: what's been delivered minus what's
@@ -924,29 +1172,6 @@
   function deliveryBbeFor(productCode, batch) {
     const d = deliveriesData.find(r => r.obj['PRODUCT CODE'] === productCode && r.obj['BATCH/LOT NUMBER'] === batch);
     return d ? d.obj['BEST BEFORE DATE'] : '';
-  }
-
-  async function handleAllocate(order, lineId) {
-    const line = orderLinesData.find(l => l.obj.ID === lineId);
-    if (!line) return;
-    const batchSel = form.querySelector(`select[data-line-batch="${CSS.escape(lineId)}"]`);
-    const qtyInput = form.querySelector(`input[data-line-qty="${CSS.escape(lineId)}"]`);
-    const batch = batchSel ? batchSel.value : '';
-    const qty = qtyInput ? parseFloat(qtyInput.value) : NaN;
-    if (!batch) { setDlgStatus('Pick a lot first.', 'error'); return; }
-    if (!qty || qty <= 0) { setDlgStatus('Enter a quantity.', 'error'); return; }
-
-    const cfg = await ensureAuth(setDlgStatus);
-    if (!cfg) return;
-    setDlgStatus('Allocating...');
-    try {
-      const existing = await sheetsGet(cfg.spreadsheetId, 'Allocations!A:A', token);
-      const id = nextId(existing.length ? existing : [['ID']], 'ALO');
-      await sheetsAppend(cfg.spreadsheetId, 'Allocations!A:F', [id, lineId, line.obj['PRODUCT CODE'], batch, qty, todayIso()], token);
-      await refreshAfterAllocationChange(order.obj.ID);
-    } catch (err) {
-      setDlgStatus('Error: ' + err.message, 'error');
-    }
   }
 
   async function handleRemoveAllocation(order, allocId) {
@@ -1069,6 +1294,7 @@
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === orderId);
     if (!lines.length) return;
     const fullyAllocated = lines.every(l => {
+      if (isCutLine(l.obj)) return true; // cut at the bench, not allocated
       const ordered = parseFloat(l.obj['QTY ORDERED']) || 0;
       const allocated = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.obj.ID).reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
       return allocated + 0.0001 >= ordered;

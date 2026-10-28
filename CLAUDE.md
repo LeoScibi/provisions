@@ -109,7 +109,14 @@ models, sheet schemas, or conventions between the two.
   OrderLines row in pieces (`expandDraftLines()`).
 - **Orders** / **OrderLines** / **Allocations** — order header (including
   `PLACED BY`, appended to Orders' headers), order lines, and stock
-  allocated to each line. All three are managed entirely from
+  allocated to each line. In the order dialog each line shows its free stock;
+  **Allocate** opens a pop-up of lots (FEFO-prefilled), **Allocate all**
+  fills every line FEFO from a shared pool, and **Replace** swaps a line's
+  product: the line keeps its original code in OrderLines.`REPLACES` (shown as
+  "replaces …" on packing slips and delivery notes), its old allocations are
+  released and the new product is allocated FEFO. Cut-to-order lines take no
+  allocation and don't hold an order back from Allocated; replacements are
+  never cut products, so the cutting list doesn't change. All three are managed entirely from
   `orders.html`'s order-view dialog — see the bullet above.
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's

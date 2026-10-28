@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=35">
+<link rel="stylesheet" href="css/style.css?v=36">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -273,7 +273,9 @@
         name: prod ? prod['Product name'] : l['PRODUCT CODE'],
         qty: ordered, unit: l.UNIT,
         isCut, lots,
-        short: !isCut && allocated + 0.0001 < ordered
+        short: !isCut && allocated + 0.0001 < ordered,
+        // Set when the line was swapped for another product (orders.html → Replace).
+        replaces: l.REPLACES ? (data.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES) : ''
       };
     });
   }
@@ -404,7 +406,7 @@
           <div class="slip-line${l.short ? ' short' : ''}">
             <span class="tick-box"></span>
             ${productThumb(l.product, 'xs')}
-            <span class="sl-name" title="${escapeHtml(l.name)}">${escapeHtml(l.name)}<span class="code">${escapeHtml(l.code)}</span></span>
+            <span class="sl-name" title="${escapeHtml(l.name)}${l.replaces ? ' — replaces ' + escapeHtml(l.replaces) : ''}">${escapeHtml(l.name)}<span class="code">${escapeHtml(l.code)}</span>${l.replaces ? `<span class="sl-replaces">replaces ${escapeHtml(l.replaces)}</span>` : ''}</span>
             <span class="sl-qty">${escapeHtml(qtyUnit(l.qty, l.unit))}</span>
             <span class="sl-from">${fromHtml(l)}</span>
           </div>`).join('') : '<div class="slip-line"><span></span><span></span><span class="muted">No lines on this order.</span></div>'}
@@ -547,7 +549,7 @@
           <table class="dn-table"><thead><tr><th>Product</th><th>Code</th><th class="num">Qty</th><th>Lot / best before</th></tr></thead>
           <tbody>${lines.map(l => `
             <tr>
-              <td>${escapeHtml(l.name)}</td>
+              <td>${escapeHtml(l.name)}${l.replaces ? `<div class="dn-replaces">Replaces ${escapeHtml(l.replaces)}</div>` : ''}</td>
               <td>${escapeHtml(l.code)}</td>
               <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
               <td>${l.isCut ? 'Cut to order' : l.lots.map(x => `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>

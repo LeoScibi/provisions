@@ -525,6 +525,30 @@ dialog .session-banner{top:12px}
    Series colour is categorical slot 1 of the data-viz palette; text stays in
    the ink tokens, never the series colour. */
 :root{--series-1:#2a78d6}
+/* Order dialog: allocation bar, line actions, Allocate / Replace pop-ups */
+.alloc-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 8px}
+.alloc-summary{font-size:13px;color:var(--steel)}
+.line-actions{white-space:nowrap;text-align:right}
+.line-actions .btn+.btn{margin-left:4px}
+.btn.ghost.attn{border-color:var(--warn);color:var(--warn)}
+.replaced-note{font-size:11.5px;color:var(--warn);font-weight:500;margin-top:2px}
+#orderDialog{max-width:960px}
+#ord_viewLinesTable td:first-child{min-width:240px}
+.sub-dialog{max-width:620px}
+.sub-h{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin:0 0 6px}
+.take-input{width:84px;text-align:right;padding:4px 8px}
+.rpl-list{display:flex;flex-direction:column;gap:4px;max-height:42vh;overflow:auto;margin-bottom:12px}
+.rpl-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;text-align:left;cursor:pointer;font:inherit;color:var(--ink)}
+.rpl-row:hover{border-color:#CFCABE}
+.rpl-row.on{border-color:var(--brand);background:var(--brand-soft)}
+.rpl-name{flex:1;min-width:0;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rpl-free{font-family:'Roboto Mono',monospace;font-size:11.5px;color:var(--ok);white-space:nowrap}
+.rpl-free.neg{color:var(--crit)}
+.rpl-qty label{display:block;margin-bottom:6px}
+.sl-replaces{display:block;font-size:11.5px;color:var(--warn)}
+.slip-line .sl-name .sl-replaces{white-space:normal}
+.dn-replaces{font-size:10pt;font-style:italic;color:#444}
+
 /* Dashboard: late deliveries panel, and the note under a capped list */
 .panel-late{border-color:#F2C4C4}
 .panel-late .panel-h h3{color:var(--crit)}
