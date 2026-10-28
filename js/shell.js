@@ -27,7 +27,8 @@
      ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],
      ['lists.html', 'Packing lists', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>']],
     [['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
-     ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>']]
+     ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>'],
+     ['reports.html', 'Reports', '<path d="M4 19h16"/><path d="M5 15l4-4 3 3 6-7"/><path d="M15 7h3v3"/>']]
   ];
 
   const page = location.pathname.split('/').pop() || 'index.html';

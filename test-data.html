@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Test data</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=34">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <h2>Test data</h2>
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in.
+  </div>
+  <div id="card" style="display:none; max-width:760px;">
+    <p style="font-size:14px; line-height:1.55;">
+      Fills the sheet with six months of made-up operations so every page has something to show:
+      an opening stock, customer orders from about 60 customers plus the shops and Selfridges, purchase
+      orders to each supplier on its own schedule, the deliveries they bring in, and the stock allocated to
+      each order as it goes out. This week's orders are left open. It uses your real customers, suppliers
+      and SKUs. Every row it writes has <span class="code">TEST</span> in its notes, so
+      <strong>Remove test data</strong> can take it all out again without touching anything else.
+    </p>
+    <div class="toolbar" style="margin:18px 0;">
+      <button type="button" class="btn" id="previewBtn">Preview 6 months of test data</button>
+      <button type="button" class="btn" id="writeBtn" disabled>Write it to the sheet</button>
+      <button type="button" class="btn danger" id="removeBtn">Remove test data</button>
+    </div>
+    <div id="out"></div>
+    <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=4"></script>
+<script src="js/sheets.js?v=4"></script>
+<script src="js/shell.js?v=6"></script>
+<script src="js/util.js?v=3"></script>
+<script>
+  // Test data generator. Deterministic (seeded), so a preview and the write
+  // that follows are the same data. Everything it writes is tagged TEST in
+  // its tab's NOTES column — PurchaseOrderLines has no notes, so its rows
+  // are found through their (TEST) purchase order instead.
+
+  const TAG = 'TEST';
+  const WEEKS = 26; // weeks of history before this one
+  const SEED = 20261028;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const ok = !!(tryResumeSession() && getStoredConfig().spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('card').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+
+  const toObjects = ([head = [], ...rows]) => rows.map((r, i) => ({ _row: i + 2, ...Object.fromEntries(head.map((h, j) => [h, r[j] ?? ''])) }));
+
+  // ---- small helpers ----
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  let rand = mulberry32(SEED);
+  const pick = arr => arr[Math.floor(rand() * arr.length)];
+  const between = (lo, hi) => lo + rand() * (hi - lo);
+  function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+  function weighted(items, weightOf) {
+    const total = items.reduce((s, x) => s + weightOf(x), 0);
+    let r = rand() * total;
+    for (const x of items) { r -= weightOf(x); if (r <= 0) return x; }
+    return items[items.length - 1];
+  }
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  function mondayOf(d) { const x = new Date(d); const day = x.getDay(); x.setDate(x.getDate() + (day === 0 ? -6 : 1 - day)); x.setHours(0, 0, 0, 0); return x; }
+  const r2 = n => Math.round(n * 100) / 100;
+  const roundUpTo = (n, step) => step > 0 ? Math.ceil(n / step - 1e-9) * step : n;
+  const maxIdNum = (rows, prefix) => rows.reduce((m, r) => { const v = (r.ID || '').toString(); return v.startsWith(prefix) ? Math.max(m, parseInt(v.slice(prefix.length), 10) || 0) : m; }, 0);
+  const idMaker = (prefix, start) => { let n = start; return () => `${prefix}${String(++n).padStart(3, '0')}`; };
+
+  // ---- the model of the business ----
+
+  const DAY_INDEX = { Monday: 0, Tuesday: 1, Wednesday: 2, Thursday: 3, Friday: 4 };
+  const CATEGORY_WEIGHT = { 'Cheese': 6, 'Charcuterie': 3, 'Pâté & Terrine': 1.5, 'Tinned Fish': 1.5, 'Condiment': 1, 'Biscuits': 1, 'Deli & Snacks': 0.8, 'Preserved Veg': 0.6, 'Jam': 0.5, 'Oil': 0.5 };
+  // Quieter August, busier autumn.
+  const SEASON = { 4: 0.95, 5: 1.0, 6: 1.05, 7: 0.95, 8: 0.8, 9: 1.05, 10: 1.15 };
+  // Suppliers: how often they're ordered from (weeks) and lead time (days).
+  const SUPPLIER_RHYTHM = {
+    'AMF/Odéon': [1, 8], 'Valsana': [1, 8], 'José Gourmet': [2, 10], 'Saveurs des Pyrénées': [2, 9], 'Cantrel': [2, 9],
+    'Maison Argaud': [4, 9], 'Martin Pouret': [4, 9], 'Olasagasti': [4, 10], 'Zooteek': [4, 10], 'Raydale Preserves': [2, 4],
+    'Anne Rozès': [4, 9], 'Trulli Ulivi': [4, 12], 'ABS Wine Agencies': [4, 10], 'Brindisa': [2, 5]
+  };
+  const ukDairy = s => /Dairy|Cheese|Creamery|Cropwell/i.test(s);
+  const rhythmOf = s => SUPPLIER_RHYTHM[s] || (ukDairy(s) ? [1, 3] : [2, 9]);
+
+  function shelfLifeDays(p) {
+    const code = p['Product code'];
+    if (p.Category === 'Cheese') {
+      if (p['Pricing basis'] === 'Per unit') return 28;
+      if (/^C.B/.test(code)) return 60;
+      return 120;
+    }
+    if (p.Category === 'Charcuterie') return 150;
+    if (p.Category === 'Pâté & Terrine') return /^MCA/.test(code) ? 45 : 400;
+    if (p.Category === 'Tinned Fish') return 900;
+    return 365;
+  }
+
+  function listPrice(p) {
+    const landed = parseFloat(p['Landed cost £']) || parseFloat(p['Cost price £']) || 0;
+    const gp = parseFloat(p['GP at list']);
+    return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
+  }
+
+  // ---- generation ----
+
+  function generate({ customers, products, existing }) {
+    rand = mulberry32(SEED);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayIso = iso(today);
+    const thisMonday = mondayOf(today);
+    const firstMonday = addDays(thisMonday, -7 * WEEKS);
+
+    const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
+    const nominal = p => parseFloat(p['Nominal weight (kg)']) || 1;
+    const isPortion = p => !!(p['Cut from (code)'] && byCode[p['Cut from (code)']]);
+    const roots = new Set(products.filter(isPortion).map(p => p['Cut from (code)']));
+
+    // What customers buy: active, sellable, priced; not the whole wheels
+    // that portions are cut from (those are sold whole only now and then).
+    const sellable = products.filter(p => p.Active !== 'No' && p.Sellable !== 'No' && p.Category !== 'Non-Food' && listPrice(p) > 0);
+    const regularPool = sellable.filter(p => !/\(Selfridges\)/.test(p['Product name']) && !roots.has(p['Product code']));
+    const selfridgesPool = sellable.filter(p => /\(Selfridges\)/.test(p['Product name']));
+    const wholes = sellable.filter(p => roots.has(p['Product code']));
+
+    // ---- customers and their habits ----
+    const named = customers.filter(c => c.Active === 'Yes' && c['Delivery zone'] && c['Delivery address']);
+    const shops = named.filter(c => /^Provisions \(/.test(c['Customer name (as in Xero)']));
+    const selfridges = named.filter(c => c['Price list'] === 'Selfridges' || /^Selfridges/.test(c['Customer name (as in Xero)']));
+    const others = shuffle(named.filter(c => !shops.includes(c) && !selfridges.includes(c))).slice(0, 60);
+    const hospitality = /wine|bar|restaurant|bistro|cafe|kitchen|club|brasserie|pub|dining/i;
+
+    function basketFor(pool, size) {
+      const chosen = new Set();
+      let guard = 0;
+      while (chosen.size < size && guard++ < size * 20) chosen.add(weighted(pool, p => CATEGORY_WEIGHT[p.Category] || 0.4));
+      return [...chosen];
+    }
+    const profiles = [];
+    shops.forEach(c => profiles.push({ c, every: 1, phase: 0, size: 3, basket: basketFor(regularPool, 40).concat(shuffle(wholes).slice(0, 2)), start: 0, stop: WEEKS + 1, trend: [1, 1.15] }));
+    selfridges.forEach(c => profiles.push({ c, every: 1, phase: 0, size: 2, basket: selfridgesPool.concat(basketFor(regularPool.filter(p => p.Category === 'Cheese'), 8)), start: 0, stop: WEEKS + 1, trend: [0.9, 1.3] }));
+    others.forEach((c, i) => {
+      const every = i < 14 ? 1 : i < 34 ? 2 : 4;
+      const hosp = hospitality.test(c['Customer name (as in Xero)']);
+      const pool = hosp ? regularPool.filter(p => ['Cheese', 'Charcuterie', 'Pâté & Terrine', 'Biscuits', 'Condiment'].includes(p.Category)) : regularPool;
+      const r = rand();
+      profiles.push({
+        c, every, phase: Math.floor(rand() * every), size: between(0.8, 2.4),
+        basket: basketFor(pool, Math.round(between(hosp ? 6 : 10, hosp ? 12 : 22))),
+        start: r < 0.1 ? Math.round(between(8, 18)) : 0,           // new customers
+        stop: r > 0.9 ? Math.round(between(10, 22)) : WEEKS + 1,    // customers who stop ordering
+        trend: [between(0.7, 1.1), between(0.75, 1.5)]              // order size, first week → last
+      });
+    });
+
+    // ---- customer orders ----
+    const orders = []; // { customer, orderDate, deliveryDate, lines: [{ p, qty, unit }] }
+    for (let w = 0; w <= WEEKS; w++) {
+      const monday = addDays(firstMonday, 7 * w);
+      profiles.forEach(pr => {
+        if (w < pr.start || w >= pr.stop || (w + pr.phase) % pr.every) return;
+        if (rand() < 0.08) return; // skipped a week
+        const zoneDay = pr.c['Delivery zone'] === 'London' ? 3 : 2;
+        const dayIdx = DAY_INDEX[pr.c['Delivery day']] ?? zoneDay;
+        const delivery = addDays(monday, Math.max(2, dayIdx));
+        const orderDate = addDays(monday, rand() < 0.6 ? 0 : 1);
+        const t = pr.trend[0] + (pr.trend[1] - pr.trend[0]) * (w / WEEKS);
+        const mult = t * (SEASON[delivery.getMonth() + 1] || 1);
+        const k = Math.min(14, Math.max(2, Math.round(pr.basket.length * between(0.3, 0.6))));
+        const items = shuffle(pr.basket).slice(0, k);
+        if (rand() < 0.15) items.push(pick(regularPool));
+        const lines = [];
+        new Set(items).forEach(p => {
+          const noise = between(0.7, 1.3);
+          if (isPortion(p)) {
+            lines.push({ p, unit: 'pc', qty: Math.max(1, Math.round(pr.size * 0.6 * mult * noise)) });
+          } else if (p['Pricing basis'] === 'Per kg') {
+            const pieces = Math.max(1, Math.round(pr.size * 0.7 * mult * noise));
+            lines.push({ p, unit: 'kg', qty: r2(pieces * nominal(p)) });
+          } else {
+            const perCase = parseFloat(p['Units per case']) || 0;
+            const isCase = p['Ordering unit'] === 'Case' && perCase > 0;
+            const n = Math.max(1, Math.round(pr.size * (isCase ? 0.6 : 2) * mult * noise));
+            lines.push({ p, unit: 'pc', qty: isCase ? n * perCase : n });
+          }
+        });
+        if (lines.length) orders.push({ customer: pr.c['Customer name (as in Xero)'], orderDate, deliveryDate: delivery, lines });
+      });
+    }
+
+    // ---- stock: what each line draws on ----
+    // A cut portion draws kg from the whole it's cut from; everything else
+    // draws its own unit from its own lots.
+    const draw = l => isPortion(l.p)
+      ? { key: l.p['Cut from (code)'], qty: r2(l.qty * nominal(l.p)) }
+      : { key: l.p['Product code'], qty: l.qty };
+    const unitOfKey = code => { const p = byCode[code]; return roots.has(code) || p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc'; };
+    const packOfKey = code => {
+      const p = byCode[code];
+      if (roots.has(code) || p['Pricing basis'] === 'Per kg') return nominal(p);
+      const perCase = parseFloat(p['Units per case']) || 0;
+      return p['Ordering unit'] === 'Case' && perCase > 0 ? perCase : 1;
+    };
+    const weeklyDemand = {};
+    orders.forEach(o => o.lines.forEach(l => { const d = draw(l); weeklyDemand[d.key] = (weeklyDemand[d.key] || 0) + d.qty / (WEEKS + 1); }));
+    const supplierOf = code => byCode[code]['Default supplier'] || 'AMF/Odéon';
+
+    const newDel = idMaker('DEL', maxIdNum(existing.Deliveries, 'DEL'));
+    const newPo = idMaker('PO', maxIdNum(existing.PurchaseOrders, 'PO'));
+    const newPol = idMaker('POL', maxIdNum(existing.PurchaseOrderLines, 'POL'));
+    const newOrd = idMaker('ORD', maxIdNum(existing.Orders, 'ORD'));
+    const newOl = idMaker('OL', maxIdNum(existing.OrderLines, 'OL'));
+    const newAlo = idMaker('ALO', maxIdNum(existing.Allocations, 'ALO'));
+
+    const rows = { Deliveries: [], PurchaseOrders: [], PurchaseOrderLines: [], Orders: [], OrderLines: [], Allocations: [] };
+    const lots = {};     // key → [{ lot, bbe, remaining }]
+    const onOrder = {};  // key → qty ordered, not yet delivered
+    const lotCode = d => `L${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${Math.floor(rand() * 900 + 100)}`;
+    function receive(code, qty, date, poId) {
+      const p = byCode[code];
+      const lot = lotCode(date);
+      const bbe = iso(addDays(date, shelfLifeDays(p) + Math.round(between(-5, 5))));
+      (lots[code] = lots[code] || []).push({ lot, bbe, remaining: qty });
+      rows.Deliveries.push([newDel(), iso(date), supplierOf(code), code, lot, bbe, qty, unitOfKey(code), TAG, poId || '']);
+      return { lot, bbe };
+    }
+
+    // Opening stock: about 3 weeks of each line's demand, the Friday before.
+    const openingDay = addDays(firstMonday, -3);
+    Object.keys(weeklyDemand).sort().forEach(code => {
+      const qty = r2(roundUpTo(weeklyDemand[code] * 3, packOfKey(code)));
+      if (qty > 0) receive(code, qty, openingDay, '');
+    });
+
+    // Day by day: Mondays place POs, deliveries land, orders go out.
+    const pending = []; // POs on their way: { po, arrive, lines }
+    const ordersByDay = {};
+    orders.forEach(o => { (ordersByDay[iso(o.deliveryDate)] = ordersByDay[iso(o.deliveryDate)] || []).push(o); });
+    const onHand = code => (lots[code] || []).reduce((s, l) => s + l.remaining, 0);
+    const placedBy = ['Alex Kiely', 'Alex Kiely', 'Leonardo Scibilia'];
+    let shortLines = 0;
+    // One customer order's rows; a dispatched one takes its stock first
+    // expiry, first out from the lots in at the time.
+    function writeOrder(o) {
+      const id = newOrd();
+      const dispatched = o.deliveryDate < today;
+      rows.Orders.push([id, iso(o.orderDate), o.customer, iso(o.deliveryDate), dispatched ? 'Dispatched' : 'New', TAG, pick(placedBy), '', dispatched ? Math.max(1, Math.ceil(o.lines.length / 4)) : '']);
+      o.lines.forEach(l => {
+        const lineId = newOl();
+        rows.OrderLines.push([lineId, id, l.p['Product code'], l.qty, l.unit, dispatched ? 'Dispatched' : 'New', TAG]);
+        if (!dispatched) return;
+        const { key, qty } = draw(l);
+        let left = qty;
+        const allocDate = iso(addDays(o.deliveryDate, -1));
+        (lots[key] || []).filter(x => x.remaining > 0.0001).sort((a, b) => a.bbe.localeCompare(b.bbe)).forEach(x => {
+          if (left <= 0.0001) return;
+          const take = r2(Math.min(left, x.remaining));
+          x.remaining = r2(x.remaining - take);
+          left = r2(left - take);
+          rows.Allocations.push([newAlo(), lineId, key, x.lot, take, allocDate, TAG]);
+        });
+        if (left > 0.0001) shortLines++;
+      });
+    }
+    const suppliers = [...new Set(Object.keys(weeklyDemand).map(supplierOf))].sort();
+
+    for (let d = new Date(firstMonday); d <= today; d = addDays(d, 1)) {
+      const dIso = iso(d);
+      // POs, on Mondays, per supplier rhythm.
+      if (d.getDay() === 1) {
+        const w = Math.round((d - firstMonday) / (7 * 864e5));
+        suppliers.forEach(s => {
+          const [every, lead] = rhythmOf(s);
+          if (w % every) return;
+          const lines = [];
+          Object.keys(weeklyDemand).filter(code => supplierOf(code) === s).forEach(code => {
+            const target = weeklyDemand[code] * (every + lead / 7 + 1.75);
+            const need = target - onHand(code) - (onOrder[code] || 0);
+            if (need > 0) lines.push({ code, qty: r2(roundUpTo(need, packOfKey(code))) });
+          });
+          if (!lines.length) return;
+          const poId = newPo();
+          const start = addDays(d, lead), end = addDays(start, rand() < 0.5 ? 1 : 2);
+          const arrive = addDays(start, rand() < 0.75 ? 0 : 1);
+          const po = { id: poId, supplier: s, orderDate: dIso, start: iso(start), end: iso(end), arrive };
+          lines.forEach(l => { onOrder[l.code] = (onOrder[l.code] || 0) + l.qty; });
+          pending.push({ po, lines });
+        });
+      }
+      // Deliveries arriving today.
+      pending.filter(x => iso(x.po.arrive) === dIso && x.po.arrive <= today).forEach(x => {
+        x.delivered = true;
+        rows.PurchaseOrders.push([x.po.id, x.po.supplier, x.po.orderDate, x.po.start, x.po.end, 'Delivered', TAG]);
+        x.lines.forEach(l => {
+          const short = rand() < 0.05 && l.qty > packOfKey(l.code) ? packOfKey(l.code) : 0;
+          const got = r2(l.qty - short);
+          const { lot, bbe } = receive(l.code, got, d, x.po.id);
+          onOrder[l.code] -= l.qty;
+          rows.PurchaseOrderLines.push([newPol(), x.po.id, l.code, l.qty, unitOfKey(l.code), got, lot, bbe, 'Delivered']);
+        });
+      });
+      // Orders delivered today.
+      (ordersByDay[dIso] || []).sort((a, b) => a.customer.localeCompare(b.customer)).forEach(writeOrder);
+    }
+    // The rest of this week's orders, still open.
+    orders.filter(o => o.deliveryDate > today).sort((a, b) => a.deliveryDate - b.deliveryDate || a.customer.localeCompare(b.customer)).forEach(writeOrder);
+    // POs still on their way.
+    pending.filter(x => !x.delivered).forEach(x => {
+      rows.PurchaseOrders.push([x.po.id, x.po.supplier, x.po.orderDate, x.po.start, x.po.end, 'Ordered', TAG]);
+      x.lines.forEach(l => rows.PurchaseOrderLines.push([newPol(), x.po.id, l.code, l.qty, unitOfKey(l.code), '', '', '', 'Ordered']));
+    });
+
+    return { rows, firstMonday: iso(firstMonday), today: todayIso, customers: profiles.length, shortLines };
+  }
+
+  // ---- reading the sheet ----
+
+  async function readAll(tabs) {
+    const cfg = getStoredConfig();
+    const res = await Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`)));
+    return Object.fromEntries(tabs.map((t, i) => [t, res[i]]));
+  }
+
+  // Rows already tagged TEST, by tab, as sheet row numbers.
+  function testRows(raw) {
+    const out = {};
+    const notesTagged = (tab, col) => toObjects(raw[tab]).filter(r => r[col] === TAG).map(r => r._row);
+    out.Orders = notesTagged('Orders', 'NOTES');
+    out.OrderLines = notesTagged('OrderLines', 'NOTES');
+    out.Allocations = notesTagged('Allocations', 'NOTES');
+    out.Deliveries = notesTagged('Deliveries', 'NOTES');
+    out.PurchaseOrders = notesTagged('PurchaseOrders', 'NOTES');
+    const testPos = new Set(toObjects(raw.PurchaseOrders).filter(r => r.NOTES === TAG).map(r => r.ID));
+    out.PurchaseOrderLines = toObjects(raw.PurchaseOrderLines).filter(r => testPos.has(r['PO ID'])).map(r => r._row);
+    return out;
+  }
+
+  const OP_TABS = ['Orders', 'OrderLines', 'Allocations', 'Deliveries', 'PurchaseOrders', 'PurchaseOrderLines'];
+  let generated = null;
+
+  async function preview() {
+    if (!requireAuth()) return;
+    setStatus('Reading the sheet…');
+    document.getElementById('writeBtn').disabled = true;
+    try {
+      const raw = await readAll(['Customers', 'Products', ...OP_TABS]);
+      const existingTest = testRows(raw);
+      const already = Object.values(existingTest).reduce((n, r) => n + r.length, 0);
+      if (already) {
+        document.getElementById('out').innerHTML = `<div class="note">The sheet already has ${already} test row(s). Remove test data first, then generate again.</div>`;
+        setStatus('');
+        return;
+      }
+      const existing = Object.fromEntries(OP_TABS.map(t => [t, toObjects(raw[t])]));
+      generated = generate({ customers: toObjects(raw.Customers), products: toObjects(raw.Products), existing });
+      const r = generated.rows;
+      document.getElementById('out').innerHTML = `
+        <div class="panel"><div class="panel-b">
+          <table><tbody>
+            <tr><td>Period</td><td class="num">${generated.firstMonday} → ${generated.today}</td></tr>
+            <tr><td>Customers ordering</td><td class="num">${generated.customers}</td></tr>
+            <tr><td>Customer orders</td><td class="num">${r.Orders.length} (${r.Orders.filter(o => o[4] !== 'Dispatched').length} open this week)</td></tr>
+            <tr><td>Order lines</td><td class="num">${r.OrderLines.length}</td></tr>
+            <tr><td>Purchase orders</td><td class="num">${r.PurchaseOrders.length} (${r.PurchaseOrders.filter(o => o[5] === 'Ordered').length} still on their way)</td></tr>
+            <tr><td>PO lines</td><td class="num">${r.PurchaseOrderLines.length}</td></tr>
+            <tr><td>Deliveries (incl. opening stock)</td><td class="num">${r.Deliveries.length}</td></tr>
+            <tr><td>Allocations</td><td class="num">${r.Allocations.length}</td></tr>
+            <tr><td>Lines that went out short of stock</td><td class="num">${generated.shortLines}</td></tr>
+          </tbody></table>
+        </div></div>`;
+      document.getElementById('writeBtn').disabled = false;
+      setStatus('Preview ready — nothing written yet.', 'ok');
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+    }
+  }
+
+  async function write() {
+    if (!generated) return;
+    const cfg = getStoredConfig();
+    const writeBtn = document.getElementById('writeBtn');
+    writeBtn.disabled = true;
+    const widths = { Deliveries: 'J', PurchaseOrders: 'G', PurchaseOrderLines: 'I', Orders: 'I', OrderLines: 'G', Allocations: 'G' };
+    try {
+      for (const tab of ['Deliveries', 'PurchaseOrders', 'PurchaseOrderLines', 'Orders', 'OrderLines', 'Allocations']) {
+        const all = generated.rows[tab];
+        for (let i = 0; i < all.length; i += 500) {
+          setStatus(`Writing ${tab}… ${Math.min(i + 500, all.length)} / ${all.length}`);
+          await sheetsAppendRows(cfg.spreadsheetId, `${tab}!A:${widths[tab]}`, all.slice(i, i + 500));
+        }
+      }
+      generated = null;
+      setStatus('Done — test data written. Remove test data takes it all out again.', 'ok');
+    } catch (err) {
+      setStatus(`Error: ${err.message} — some rows may already be written; Remove test data clears them.`, 'error');
+    }
+  }
+
+  async function removeTestData() {
+    if (!requireAuth()) return;
+    if (!confirm('Delete every row tagged TEST from orders, order lines, allocations, deliveries and purchase orders? Nothing else is touched.')) return;
+    const cfg = getStoredConfig();
+    setStatus('Finding test rows…');
+    try {
+      const raw = await readAll(OP_TABS);
+      const found = testRows(raw);
+      const tabs = await sheetsGetTabs(cfg.spreadsheetId);
+      const requests = [];
+      Object.entries(found).forEach(([tab, rowNumbers]) => {
+        const sheetId = tabs.find(t => t.title === tab)?.sheetId;
+        if (sheetId === undefined || !rowNumbers.length) return;
+        // Contiguous runs, highest first, so earlier deletes don't shift later ones.
+        const sorted = rowNumbers.slice().sort((a, b) => b - a);
+        let runEnd = sorted[0], runStart = sorted[0];
+        const flush = () => requests.push({ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: runStart - 1, endIndex: runEnd } } });
+        sorted.slice(1).forEach(n => { if (n === runStart - 1) runStart = n; else { flush(); runEnd = runStart = n; } });
+        flush();
+      });
+      const total = Object.values(found).reduce((n, r) => n + r.length, 0);
+      if (!total) { setStatus('No test data in the sheet.', 'ok'); return; }
+      setStatus(`Deleting ${total} test row(s)…`);
+      for (let i = 0; i < requests.length; i += 200) await sheetsBatchUpdate(cfg.spreadsheetId, requests.slice(i, i + 200));
+      document.getElementById('out').innerHTML = '';
+      setStatus(`Removed ${total} test row(s).`, 'ok');
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+    }
+  }
+
+  document.getElementById('previewBtn').addEventListener('click', preview);
+  document.getElementById('writeBtn').addEventListener('click', write);
+  document.getElementById('removeBtn').addEventListener('click', removeTestData);
+  window.addEventListener('load', requireAuth);
+</script>
+</body>
+</html>

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Reports</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=34">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <h2>Reports</h2>
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in.
+  </div>
+
+  <div id="reportCard" style="display:none;">
+    <div class="rp-filters">
+      <div class="seg" role="tablist" aria-label="Report">
+        <button type="button" class="seg-btn" data-view="customers">Customers</button>
+        <button type="button" class="seg-btn" data-view="suppliers">Suppliers</button>
+        <button type="button" class="seg-btn" data-view="products">Products</button>
+      </div>
+      <div class="seg" role="tablist" aria-label="Measure" id="measureSeg"></div>
+      <div class="seg" role="tablist" aria-label="Period">
+        <button type="button" class="seg-btn" data-bucket="week">Weekly</button>
+        <button type="button" class="seg-btn" data-bucket="month">Monthly</button>
+      </div>
+    </div>
+
+    <div class="panel rp-main">
+      <div class="rp-head">
+        <div>
+          <div class="rp-kicker" id="rpKicker"></div>
+          <div class="rp-title" id="rpTitle"></div>
+        </div>
+        <div class="rp-stats" id="rpStats"></div>
+      </div>
+      <div class="rp-body">
+        <div class="rp-chart" id="rpChart"></div>
+        <div class="rp-side" id="rpSide"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">
+        <h3 id="rpTableTitle"></h3>
+        <input type="search" id="rpSearch" placeholder="Search…" style="margin-left:auto; width:220px;">
+      </div>
+      <div class="scroll" style="overflow-x:auto;">
+        <table class="rp-table">
+          <thead><tr>
+            <th data-sort="name">Name</th>
+            <th>Last 6 months</th>
+            <th class="num" data-sort="total" id="rpTotalHead">Total</th>
+            <th class="num" data-sort="share">Share</th>
+            <th class="num" data-sort="count" id="rpCountHead">Orders</th>
+            <th class="num" data-sort="trend" title="Last 13 weeks against the 13 before">Trend</th>
+            <th data-sort="last">Last</th>
+          </tr></thead>
+          <tbody id="rpRows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=4"></script>
+<script src="js/sheets.js?v=4"></script>
+<script src="js/shell.js?v=6"></script>
+<script src="js/util.js?v=3"></script>
+<script>
+  // Sales and purchase trends over the last 26 weeks. Nothing new is
+  // stored: sales come from Orders + OrderLines (by delivery date, valued at
+  // list price = landed cost ÷ (1 − GP at list)), purchases from
+  // PurchaseOrders + PurchaseOrderLines (by order date, at cost price),
+  // excluding cancelled POs. Weight counts kg lines, and pieces of products
+  // with a nominal weight.
+
+  const WEEKS = 26;
+  const VIEW_KEY = 'provisions_reportView';
+  const MEASURES = {
+    sales: [['value', 'Sales £'], ['kg', 'Weight kg'], ['count', 'Orders']],
+    purchases: [['value', 'Purchases £'], ['kg', 'Weight kg'], ['count', 'POs']]
+  };
+  const state = { view: 'customers', measure: 'value', bucket: 'week', focus: null, sort: 'total', dir: -1, term: '' };
+  try { Object.assign(state, JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'), { focus: null, term: '' }); } catch (e) {}
+  let data = null; // { sales: [...], purchases: [...], buckets }
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const ok = !!(tryResumeSession() && getStoredConfig().spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('reportCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+  const toObjects = ([head = [], ...rows]) => rows.map(r => Object.fromEntries(head.map((h, j) => [h, r[j] ?? ''])));
+
+  // ---- dates and buckets ----
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function mondayOf(d) { const x = new Date(d); const day = x.getDay(); x.setDate(x.getDate() + (day === 0 ? -6 : 1 - day)); x.setHours(0, 0, 0, 0); return x; }
+  function buildBuckets() {
+    const thisMonday = mondayOf(new Date());
+    const weeks = [];
+    for (let i = WEEKS - 1; i >= 0; i--) {
+      const start = new Date(thisMonday); start.setDate(start.getDate() - 7 * i);
+      weeks.push({ key: iso(start), label: start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), start });
+    }
+    const months = [];
+    const m0 = new Date(thisMonday.getFullYear(), thisMonday.getMonth() - 5, 1);
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(m0.getFullYear(), m0.getMonth() + i, 1);
+      months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleDateString('en-GB', { month: 'short' }), start: d });
+    }
+    return { week: weeks, month: months, from: iso(weeks[0].start < months[0].start ? weeks[0].start : months[0].start) };
+  }
+  const weekKey = dateStr => iso(mondayOf(new Date(dateStr + 'T00:00:00')));
+  const monthKey = dateStr => dateStr.slice(0, 7);
+
+  // ---- values ----
+  function listPrice(p) {
+    const landed = parseFloat(p['Landed cost £']) || parseFloat(p['Cost price £']) || 0;
+    const gp = parseFloat(p['GP at list']);
+    return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
+  }
+  // Value and weight of `qty` in `unit` of product `p`, at `price` (per kg
+  // for products priced per kg, per piece otherwise).
+  function lineMeasures(p, qty, unit, price) {
+    const nominal = parseFloat(p['Nominal weight (kg)']) || 0;
+    const perKg = p['Pricing basis'] === 'Per kg';
+    const kg = unit === 'kg' ? qty : nominal * qty;
+    const value = perKg ? (unit === 'kg' ? qty : nominal * qty) * price : qty * price;
+    return { kg, value };
+  }
+
+  async function load() {
+    if (!requireAuth()) return;
+    const cfg = getStoredConfig();
+    setStatus('Loading…');
+    try {
+      const tabs = ['Orders', 'OrderLines', 'Products', 'PurchaseOrders', 'PurchaseOrderLines'];
+      const [rows, groupRows] = await Promise.all([
+        Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`))),
+        sheetsGet(cfg.spreadsheetId, 'ProductGroups!A:Z').catch(() => [])
+      ]);
+      const [orders, lines, products, pos, poLines] = rows.map(toObjects);
+      const groups = toObjects(groupRows);
+      const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
+      const groupName = Object.fromEntries(groups.map(g => [g.ID, g['Product name']]));
+      const productName = p => groupName[p['Group ID']] || (p['Product name'] || '').split(' — ')[0];
+      const buckets = buildBuckets();
+
+      const orderById = Object.fromEntries(orders.map(o => [o.ID, o]));
+      const sales = [];
+      lines.forEach(l => {
+        const o = orderById[l['ORDER ID']], p = byCode[l['PRODUCT CODE']];
+        if (!o || !p) return;
+        const date = o['DELIVERY DATE'] || o.DATE;
+        if (!date || date < buckets.from) return;
+        const qty = parseFloat(l['QTY ORDERED']) || 0;
+        const m = lineMeasures(p, qty, l.UNIT, listPrice(p));
+        sales.push({ date, customer: o.CUSTOMER, supplier: p['Default supplier'], product: productName(p), item: p['Product name'], code: p['Product code'], order: o.ID, qty, unit: l.UNIT, ...m });
+      });
+
+      const poById = Object.fromEntries(pos.map(o => [o.ID, o]));
+      const purchases = [];
+      poLines.forEach(l => {
+        const po = poById[l['PO ID']], p = byCode[l['PRODUCT CODE']];
+        if (!po || !p || po.STATUS === 'Cancelled') return;
+        const date = po['ORDER DATE'];
+        if (!date || date < buckets.from) return;
+        const qty = parseFloat(l['QTY RECEIVED']) || parseFloat(l['QTY ORDERED']) || 0;
+        const m = lineMeasures(p, qty, l.UNIT, parseFloat(p['Cost price £']) || 0);
+        purchases.push({ date, supplier: po.SUPPLIER, product: productName(p), item: p['Product name'], code: p['Product code'], order: po.ID, qty, unit: l.UNIT, ...m });
+      });
+
+      data = { sales, purchases, buckets };
+      render();
+      setStatus(`${new Set(sales.map(s => s.order)).size} orders and ${new Set(purchases.map(s => s.order)).size} POs since ${buckets.from}.`);
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  // ---- aggregation ----
+  const source = () => state.view === 'suppliers' ? data.purchases : data.sales;
+  const entityOf = r => state.view === 'customers' ? r.customer : state.view === 'suppliers' ? r.supplier : r.product;
+
+  function series(recs) {
+    const list = data.buckets[state.bucket];
+    const keyOf = state.bucket === 'week' ? weekKey : monthKey;
+    const idx = Object.fromEntries(list.map((b, i) => [b.key, i]));
+    const vals = list.map(() => 0), orderSets = list.map(() => new Set());
+    recs.forEach(r => {
+      const i = idx[keyOf(r.date)];
+      if (i === undefined) return;
+      if (state.measure === 'count') orderSets[i].add(r.order); else vals[i] += r[state.measure];
+    });
+    return state.measure === 'count' ? orderSets.map(s => s.size) : vals;
+  }
+  function total(recs) {
+    return state.measure === 'count' ? new Set(recs.map(r => r.order)).size : recs.reduce((s, r) => s + r[state.measure], 0);
+  }
+  // Last 13 weeks against the 13 before (weekly buckets, whatever's shown).
+  function trend(recs) {
+    const weeks = data.buckets.week, cut = weeks[13].key;
+    const a = recs.filter(r => weekKey(r.date) < cut), b = recs.filter(r => weekKey(r.date) >= cut);
+    const ta = total(a), tb = total(b);
+    return ta ? (tb - ta) / ta : (tb ? null : 0);
+  }
+
+  // ---- formatting ----
+  function fmt(v, measure = state.measure) {
+    if (measure === 'count') return String(Math.round(v));
+    if (measure === 'kg') return v >= 1000 ? `${(v / 1000).toFixed(1)}t` : `${v.toFixed(v < 100 ? 1 : 0)}kg`;
+    return v >= 10000 ? `£${(v / 1000).toFixed(1)}k` : `£${Math.round(v).toLocaleString('en-GB')}`;
+  }
+  const fmtTrend = t => t === null ? 'new' : `${t > 0 ? '+' : ''}${Math.round(t * 100)}%`;
+  const trendClass = t => t === null ? 'up' : t > 0.05 ? 'up' : t < -0.05 ? 'down' : '';
+
+  // ---- the chart: one series, crosshair + tooltip ----
+  function lineChart(el, values, labels) {
+    const W = 760, H = 260, L = 56, R = 16, T = 16, B = 28;
+    const max = Math.max(1, ...values) * 1.1;
+    const step = niceStep(max / 4);
+    const top = Math.ceil(max / step) * step;
+    const x = i => L + (values.length === 1 ? 0 : i * (W - L - R) / (values.length - 1));
+    const y = v => T + (H - T - B) * (1 - v / top);
+    const ticks = []; for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+    const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    const labelEvery = Math.ceil(values.length / 8);
+    el.innerHTML = `
+      <svg viewBox="0 0 ${W} ${H}" class="rp-svg" role="img" aria-label="${escapeHtml(document.getElementById('rpTitle').textContent)}">
+        ${ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="rp-grid"/><text x="${L - 8}" y="${y(v) + 4}" class="rp-axis" text-anchor="end">${escapeHtml(fmt(v))}</text>`).join('')}
+        ${labels.map((lb, i) => {
+          // Every Nth label, plus the last one unless it would crowd the one before.
+          const last = i === labels.length - 1;
+          const show = i % labelEvery === 0 || (last && i % labelEvery >= labelEvery / 2);
+          return show ? `<text x="${x(i)}" y="${H - 8}" class="rp-axis" text-anchor="${last ? 'end' : 'middle'}">${escapeHtml(lb)}</text>` : '';
+        }).join('')}
+        <polygon points="${L},${y(0)} ${pts.join(' ')} ${x(values.length - 1)},${y(0)}" class="rp-area"/>
+        <polyline points="${pts.join(' ')}" class="rp-line"/>
+        <line class="rp-cross" y1="${T}" y2="${H - B}" x1="0" x2="0" style="display:none"/>
+        <circle class="rp-dot" r="5" style="display:none"/>
+        <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" class="rp-hit"/>
+      </svg>
+      <div class="rp-tip" style="display:none"></div>`;
+    const svg = el.querySelector('svg'), tip = el.querySelector('.rp-tip');
+    const cross = el.querySelector('.rp-cross'), dot = el.querySelector('.rp-dot');
+    svg.querySelector('.rp-hit').addEventListener('mousemove', e => {
+      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+      const sx = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+      const i = Math.max(0, Math.min(values.length - 1, Math.round((sx - L) / ((W - L - R) / Math.max(1, values.length - 1)))));
+      cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.style.display = '';
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(values[i])); dot.style.display = '';
+      tip.innerHTML = `<div class="rp-tip-k">${state.bucket === 'week' ? 'Week of ' : ''}${escapeHtml(labels[i])}</div><div class="rp-tip-v">${escapeHtml(fmt(values[i]))}</div>`;
+      tip.style.display = '';
+      const box = el.getBoundingClientRect(), px = (x(i) / W) * box.width;
+      tip.style.left = `${Math.min(box.width - tip.offsetWidth - 4, Math.max(4, px - tip.offsetWidth / 2))}px`;
+      tip.style.top = `${(y(values[i]) / H) * box.height - tip.offsetHeight - 12}px`;
+    });
+    svg.querySelector('.rp-hit').addEventListener('mouseleave', () => { cross.style.display = dot.style.display = tip.style.display = 'none'; });
+  }
+  function niceStep(raw) {
+    const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+    const n = raw / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  }
+  function sparkline(values) {
+    const W = 120, H = 28, max = Math.max(1e-9, ...values);
+    const pts = values.map((v, i) => `${(i * W / Math.max(1, values.length - 1)).toFixed(1)},${(H - 2 - (H - 4) * v / max).toFixed(1)}`).join(' ');
+    return `<svg viewBox="0 0 ${W} ${H}" class="rp-spark" aria-hidden="true"><polyline points="${pts}"/></svg>`;
+  }
+
+  // ---- rendering ----
+  function render() {
+    if (!data) return;
+    try { localStorage.setItem(VIEW_KEY, JSON.stringify({ view: state.view, measure: state.measure, bucket: state.bucket, sort: state.sort, dir: state.dir })); } catch (e) {}
+    const kind = state.view === 'suppliers' ? 'purchases' : 'sales';
+    if (!MEASURES[kind].some(m => m[0] === state.measure)) state.measure = 'value';
+    document.getElementById('measureSeg').innerHTML = MEASURES[kind].map(([k, l]) => `<button type="button" class="seg-btn${state.measure === k ? ' on' : ''}" data-measure="${k}">${l}</button>`).join('');
+    document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === state.view));
+    document.querySelectorAll('[data-bucket]').forEach(b => b.classList.toggle('on', b.dataset.bucket === state.bucket));
+
+    const recs = source();
+    const focusRecs = state.focus ? recs.filter(r => entityOf(r) === state.focus) : recs;
+    const measureLabel = MEASURES[kind].find(m => m[0] === state.measure)[1];
+    const what = { customers: 'All customers', suppliers: 'All suppliers', products: 'All products' }[state.view];
+    document.getElementById('rpKicker').innerHTML = state.focus
+      ? `<button type="button" class="rp-back" id="rpBack">← ${escapeHtml(what)}</button>`
+      : `${escapeHtml(measureLabel)} · last 6 months`;
+    document.getElementById('rpTitle').textContent = state.focus || what;
+    const t = trend(focusRecs);
+    const orderCount = new Set(focusRecs.map(r => r.order)).size;
+    document.getElementById('rpStats').innerHTML = `
+      <div class="stat"><span class="l">${escapeHtml(measureLabel)}</span><span class="n">${escapeHtml(fmt(total(focusRecs)))}</span></div>
+      <div class="stat"><span class="l">${kind === 'sales' ? 'Orders' : 'POs'}</span><span class="n">${orderCount}</span></div>
+      <div class="stat"><span class="l">Last 13 wks vs prior</span><span class="n rp-trend ${trendClass(t)}">${escapeHtml(fmtTrend(t))}</span></div>`;
+    const labels = data.buckets[state.bucket].map(b => b.label);
+    lineChart(document.getElementById('rpChart'), series(focusRecs), labels);
+    renderSide(focusRecs, kind);
+    renderTable(recs, kind, measureLabel);
+    document.getElementById('rpBack')?.addEventListener('click', () => { state.focus = null; render(); });
+  }
+
+  // Top items for the whole view, or the focused customer / supplier /
+  // product (for a product: its top customers).
+  function renderSide(recs, kind) {
+    const byItem = new Map();
+    const keyOf = state.view === 'products' && state.focus ? (r => r.customer || r.supplier) : (r => r.item);
+    recs.forEach(r => {
+      const k = keyOf(r);
+      const x = byItem.get(k) || { name: k, value: 0, kg: 0, orders: new Set() };
+      x.value += r.value; x.kg += r.kg; x.orders.add(r.order);
+      byItem.set(k, x);
+    });
+    const metric = x => state.measure === 'count' ? x.orders.size : x[state.measure];
+    const list = [...byItem.values()].sort((a, b) => metric(b) - metric(a)).slice(0, 8);
+    const max = Math.max(1e-9, ...list.map(metric));
+    const title = state.view === 'products' && state.focus ? 'Top customers' : (kind === 'sales' ? 'Top items sold' : 'Top items bought');
+    document.getElementById('rpSide').innerHTML = `
+      <div class="rp-side-h">${title}</div>
+      ${list.length ? list.map(x => `
+        <div class="rp-bar">
+          <div class="rp-bar-t"><span class="rp-bar-name" title="${escapeHtml(x.name)}">${escapeHtml(x.name)}</span><span class="rp-bar-v">${escapeHtml(fmt(metric(x)))}</span></div>
+          <div class="rp-bar-track"><div class="rp-bar-fill" style="width:${(metric(x) / max * 100).toFixed(1)}%"></div></div>
+        </div>`).join('') : '<div class="muted" style="font-size:13px;">Nothing in this period.</div>'}`;
+  }
+
+  function renderTable(recs, kind, measureLabel) {
+    const groups = new Map();
+    recs.forEach(r => { const k = entityOf(r); if (!k) return; (groups.get(k) || groups.set(k, []).get(k)).push(r); });
+    const grand = total(recs) || 1;
+    let rows = [...groups.entries()].map(([name, rs]) => ({
+      name, rs, total: total(rs), count: new Set(rs.map(r => r.order)).size, trend: trend(rs),
+      last: rs.reduce((m, r) => r.date > m ? r.date : m, '')
+    }));
+    rows.forEach(r => { r.share = r.total / grand; });
+    if (state.term) rows = rows.filter(r => searchMatch(r.name, searchNorm(state.term)));
+    const val = (r, k) => k === 'trend' ? (r.trend === null ? Infinity : r.trend) : r[k];
+    rows.sort((a, b) => state.sort === 'name' || state.sort === 'last'
+      ? state.dir * String(a[state.sort]).localeCompare(String(b[state.sort]))
+      : state.dir * (val(a, state.sort) - val(b, state.sort)));
+    document.getElementById('rpTableTitle').textContent = `${{ customers: 'Customers', suppliers: 'Suppliers', products: 'Products' }[state.view]} · ${rows.length}`;
+    document.getElementById('rpTotalHead').textContent = measureLabel;
+    document.getElementById('rpCountHead').textContent = kind === 'sales' ? 'Orders' : 'POs';
+    document.querySelectorAll('.rp-table th[data-sort]').forEach(th => th.classList.toggle('sorted', th.dataset.sort === state.sort));
+    const day = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—';
+    document.getElementById('rpRows').innerHTML = rows.length ? rows.map(r => `
+      <tr data-entity="${escapeHtml(r.name)}" class="${state.focus === r.name ? 'on' : ''}">
+        <td><strong>${escapeHtml(r.name)}</strong></td>
+        <td>${sparkline(series(r.rs))}</td>
+        <td class="num">${escapeHtml(fmt(r.total))}</td>
+        <td class="num">${(r.share * 100).toFixed(1)}%</td>
+        <td class="num">${r.count}</td>
+        <td class="num"><span class="rp-trend ${trendClass(r.trend)}">${escapeHtml(fmtTrend(r.trend))}</span></td>
+        <td>${escapeHtml(day(r.last))}</td>
+      </tr>`).join('') : `<tr><td colspan="7" class="empty" style="padding:18px;">Nothing in the last 6 months.</td></tr>`;
+  }
+
+  document.addEventListener('click', e => {
+    const v = e.target.closest('[data-view]');
+    if (v) { state.view = v.dataset.view; state.focus = null; render(); return; }
+    const m = e.target.closest('[data-measure]');
+    if (m) { state.measure = m.dataset.measure; render(); return; }
+    const b = e.target.closest('[data-bucket]');
+    if (b) { state.bucket = b.dataset.bucket; render(); return; }
+    const th = e.target.closest('.rp-table th[data-sort]');
+    if (th) { if (state.sort === th.dataset.sort) state.dir *= -1; else { state.sort = th.dataset.sort; state.dir = th.dataset.sort === 'name' ? 1 : -1; } render(); return; }
+    const tr = e.target.closest('#rpRows tr[data-entity]');
+    if (tr) { state.focus = state.focus === tr.dataset.entity ? null : tr.dataset.entity; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  });
+  document.getElementById('rpSearch').addEventListener('input', e => { state.term = e.target.value.trim(); render(); });
+  window.addEventListener('load', load);
+</script>
+</body>
+</html>

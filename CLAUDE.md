@@ -138,7 +138,16 @@ stock-take.html                    Physical count vs. system quantity
 orders.html                          Place orders, allocate stock
 lists.html                             Cutting list, packing slips (truck order, box
                                        counts), delivery notes, box labels
+reports.html                             6-month sales / purchase trends by customer,
+                                         supplier and product (computed, nothing stored)
+test-data.html                           Generates / removes 6 months of TEST-tagged
+                                         orders, POs, deliveries and allocations
 ```
+
+Test data: every row `test-data.html` writes carries `TEST` in its tab's
+NOTES (PurchaseOrderLines, which has none, via its TEST purchase order), so
+"Remove test data" deletes exactly those rows. Don't add NOTES = TEST to
+real data.
 
 ## Working here
 - Always confirm you're in `~/provisionslondon` (not a Downloads copy or

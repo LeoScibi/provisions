@@ -521,6 +521,51 @@ dialog .session-banner{top:12px}
 
 /* Picking/cutting/packing lists get printed and taken to the warehouse
    floor — strip the app chrome down to just the list content. */
+/* Reports (reports.html): one-series trend chart, top items, ranked table.
+   Series colour is categorical slot 1 of the data-viz palette; text stays in
+   the ink tokens, never the series colour. */
+:root{--series-1:#2a78d6}
+.rp-filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.rp-main{overflow:visible}
+.rp-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;padding:18px 20px 6px}
+.rp-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--mist);font-weight:600;min-height:16px}
+.rp-title{font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--ink);margin-top:2px}
+.rp-back{border:0;background:none;padding:0;font:inherit;color:var(--brand);cursor:pointer;text-transform:uppercase;letter-spacing:.1em}
+.rp-stats{display:flex;flex-wrap:wrap}
+.rp-stats .stat{margin-right:28px}
+.rp-stats .stat:last-child{margin-right:0}
+.rp-body{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:8px 20px;padding:4px 20px 18px}
+@media (max-width:860px){.rp-body{grid-template-columns:1fr}}
+.rp-chart{position:relative;min-width:0}
+.rp-svg{width:100%;height:auto;display:block;overflow:visible}
+.rp-grid{stroke:var(--hair);stroke-width:1}
+.rp-axis{font-family:'Roboto Mono',monospace;font-size:10.5px;fill:var(--mist)}
+.rp-line{fill:none;stroke:var(--series-1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.rp-area{fill:var(--series-1);fill-opacity:.08}
+.rp-cross{stroke:var(--steel);stroke-width:1;stroke-dasharray:3 3}
+.rp-dot{fill:var(--series-1);stroke:var(--white);stroke-width:2}
+.rp-hit{cursor:crosshair}
+.rp-tip{position:absolute;pointer-events:none;background:var(--brand-deep);color:#fff;border-radius:10px;padding:7px 10px;box-shadow:var(--shadow-lg);white-space:nowrap}
+.rp-tip-k{font-size:11px;opacity:.8}
+.rp-tip-v{font-family:'Roboto Mono',monospace;font-size:14px;font-weight:700}
+.rp-side-h{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin:6px 0 10px}
+.rp-bar{margin-bottom:9px}
+.rp-bar-t{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;margin-bottom:3px}
+.rp-bar-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.rp-bar-v{font-family:'Roboto Mono',monospace;font-size:11.5px;color:var(--steel);white-space:nowrap}
+.rp-bar-track{height:6px;background:var(--hair);border-radius:3px;overflow:hidden}
+.rp-bar-fill{height:100%;background:var(--series-1);border-radius:3px}
+.rp-table th[data-sort]{cursor:pointer;user-select:none}
+.rp-table th.sorted{color:var(--ink)}
+.rp-table tbody tr{cursor:pointer}
+.rp-table tbody tr:hover{background:var(--paper)}
+.rp-table tbody tr.on{background:var(--brand-soft)}
+.rp-spark{width:120px;height:28px;display:block}
+.rp-spark polyline{fill:none;stroke:var(--series-1);stroke-width:1.5;stroke-linejoin:round}
+.rp-trend{font-family:'Roboto Mono',monospace;font-weight:600}
+.rp-trend.up{color:var(--ok)}
+.rp-trend.down{color:var(--crit)}
+
 /* Products page: Products / SKUs view switch */
 .seg{display:inline-flex;background:var(--white);border:1px solid var(--line);border-radius:999px;padding:3px}
 .seg-btn{border:0;background:none;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:500;color:var(--steel);cursor:pointer}
