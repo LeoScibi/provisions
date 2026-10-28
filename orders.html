@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=36">
+<link rel="stylesheet" href="css/style.css?v=37">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -300,6 +300,7 @@
 
   function renderNewOrderForm() {
     draftLines = [];
+    draftListKey = null;
     const info = getStoredUserInfo();
     form.innerHTML = `
       <div class="dlg-h">
@@ -311,37 +312,40 @@
         </button>
       </div>
       <div class="dlg-b">
-        <div class="row">
-          <div class="col field">
-            <label>Customer *</label>
-            <select id="ord_customer"><option value="">Select a customer…</option>${customers.map(c => `<option value="${escapeHtml(c['Customer name (as in Xero)'])}">${escapeHtml(c['Customer name (as in Xero)'])}</option>`).join('')}</select>
+        <div class="no-grid">
+          <div class="no-order">
+            <div class="row">
+              <div class="col field">
+                <label>Customer *</label>
+                <select id="ord_customer"><option value="">Select a customer…</option>${customers.map(c => `<option value="${escapeHtml(c['Customer name (as in Xero)'])}">${escapeHtml(c['Customer name (as in Xero)'])}</option>`).join('')}</select>
+              </div>
+              <div class="col field">
+                <label>Delivery date *</label>
+                <input type="date" id="ord_deliveryDate">
+              </div>
+            </div>
+            <div class="row">
+              <div class="col field">
+                <label>Order date</label>
+                <input type="date" id="ord_orderDate" value="${todayIso()}">
+              </div>
+              <div class="col field">
+                <label>Placed by *</label>
+                <input type="text" id="ord_placedBy" value="${escapeHtml(info.name || info.email || '')}" placeholder="Your name">
+              </div>
+            </div>
+            <div class="no-list-h"><label>Order</label><span id="ord_orderSummary" class="mono"></span></div>
+            <div id="ord_draftList" class="no-list"></div>
+            <div class="field" style="margin-top:12px;">
+              <label>Notes</label>
+              <textarea id="ord_notes" placeholder="Optional"></textarea>
+            </div>
           </div>
-          <div class="col field">
-            <label>Delivery date *</label>
-            <input type="date" id="ord_deliveryDate">
+          <div class="no-search">
+            <label for="ord_productSearch">Add products</label>
+            <input type="search" id="ord_productSearch" placeholder="Search by name or code…">
+            <div id="ord_productPicker" class="no-picker"></div>
           </div>
-        </div>
-        <div class="row">
-          <div class="col field">
-            <label>Order date</label>
-            <input type="date" id="ord_orderDate" value="${todayIso()}">
-          </div>
-          <div class="col field">
-            <label>Placed by *</label>
-            <input type="text" id="ord_placedBy" value="${escapeHtml(info.name || info.email || '')}" placeholder="Your name">
-          </div>
-        </div>
-
-        <div class="field">
-          <label>Products</label>
-          <input type="search" id="ord_productSearch" placeholder="Search products by name or code..." style="margin-bottom:10px;">
-          <div id="ord_productPicker"></div>
-          <div id="ord_orderSummary" class="mono" style="margin-top:10px; font-size:13px; color:var(--steel); text-align:right;"></div>
-        </div>
-
-        <div class="field" style="margin-top:12px;">
-          <label>Notes</label>
-          <textarea id="ord_notes" placeholder="Optional"></textarea>
         </div>
         <div id="orderDlgStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
@@ -350,7 +354,8 @@
         <button type="submit" class="btn" id="orderSubmitBtn">Place order</button>
       </div>
     `;
-    renderProductPicker();
+    dialogEl.classList.add('dlg-wide');
+    renderProductPicker(undefined, undefined, [], undefined, true);
 
     const customerSel = form.querySelector('#ord_customer');
     const searchInput = form.querySelector('#ord_productSearch');
@@ -360,10 +365,12 @@
       || !!form.querySelector('#ord_notes').value.trim()
       || !!form.querySelector('#ord_deliveryDate').value;
 
-    searchInput.addEventListener('input', () => renderProductPicker());
+    searchInput.addEventListener('input', () => renderProductPicker(undefined, undefined, [], undefined, true));
 
     form.onclick = (e) => {
       if (e.target.closest('[data-cancel]')) { guard.guardedClose(); return; }
+      const rmDraft = e.target.closest('[data-remove-draft]');
+      if (rmDraft) { draftLines = draftLines.filter(l => l.code !== rmDraft.dataset.removeDraft); renderOrderSummary(); return; }
       const stepBtn = e.target.closest('[data-step]');
       if (stepBtn) { adjustDraftQty(stepBtn.dataset.code, parseInt(stepBtn.dataset.step, 10)); return; }
     };
@@ -387,7 +394,9 @@
   // picker: `mountId`/`searchId`/`summaryId` point at whichever dialog is
   // open, and `excludeCodes` keeps products already on the order out of the
   // View dialog's picker (irrelevant — always empty — for a brand-new order).
-  function renderProductPicker(mountId = 'ord_productPicker', searchId = 'ord_productSearch', excludeCodes = [], summaryId = 'ord_orderSummary') {
+  // `compact`: the New Order dialog's narrow search column — small cards
+  // with a + button; quantities are then set in the order list beside it.
+  function renderProductPicker(mountId = 'ord_productPicker', searchId = 'ord_productSearch', excludeCodes = [], summaryId = 'ord_orderSummary', compact = false) {
     activeSummaryId = summaryId;
     stockPos = computeStockPosition({
       deliveries: deliveriesData.map(r => r.obj), allocations: allocationsData.map(r => r.obj),
@@ -424,7 +433,7 @@
     mount.innerHTML = [...byCategory.keys()].sort().map(cat => `
       <div class="cat-group">
         <div class="cat-group-head"><span class="g-name">${escapeHtml(cat)}</span><span class="g-count">${byCategory.get(cat).length}</span></div>
-        ${byCategory.get(cat).map(it => it.kind === 'family' ? familyPickerRowHtml(it.f) : productPickerRowHtml(it.p)).join('')}
+        ${byCategory.get(cat).map(it => compact ? pickCardHtml(it) : it.kind === 'family' ? familyPickerRowHtml(it.f) : productPickerRowHtml(it.p)).join('')}
       </div>
     `).join('');
     renderOrderSummary();
@@ -571,9 +580,67 @@
       addBtn.hidden = !n;
       addBtn.textContent = `Add ${n} item${n === 1 ? '' : 's'} to order`;
     }
+    renderDraftList();
+    form.querySelectorAll('.pick-card').forEach(card => {
+      const line = draftLines.find(l => l.code === card.dataset.pickCode);
+      card.classList.toggle('in', !!line);
+      card.querySelector('.pick-badge').textContent = line ? draftBadge(line) : '';
+    });
     const el = form.querySelector(`#${activeSummaryId}`);
     if (!el) return;
-    el.textContent = n ? `${n} item${n === 1 ? '' : 's'} added` : '';
+    el.textContent = n ? `${n} item${n === 1 ? '' : 's'}` : '';
+  }
+
+  // ---- New Order: compact search cards (right) and the order list (left) ----
+
+  const shortDay = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+  const draftBadge = l => l.family ? `${l.units} ×` : qtyUnit(roundQty(l.qty), l.unit);
+
+  function compactStockHtml(pos, unit) {
+    pos = pos || { free: 0, incoming: [] };
+    const next = pos.incoming[0];
+    return `<span class="${pos.free > 0 ? '' : 'neg'}">${pos.free > 0 ? escapeHtml(qtyUnit(roundQty(pos.free), unit)) + ' free' : 'none free'}</span>`
+      + (next ? ` · +${escapeHtml(qtyUnit(roundQty(next.qty), next.unit || unit))} ${escapeHtml(shortDay(next.start))}` : '');
+  }
+
+  function pickCardHtml(it) {
+    const fam = it.kind === 'family' ? it.f : null;
+    const p = fam ? (fam.root || fam.small.p) : it.p;
+    const code = fam ? fam.code : p['Product code'];
+    const meta = productOrderMeta(p);
+    const line = draftLines.find(l => l.code === code);
+    const pack = fam ? `Cut · ${fam.small.label}${fam.small.kg ? ` ${fam.small.kg}kg` : ''}`
+      : meta.isCase ? `${meta.perCase} per case` : meta.unit === 'kg' ? 'per kg' : 'each';
+    const stock = fam ? (fam.root ? compactStockHtml(stockPos[fam.rootCode], productOrderMeta(fam.root).unit) : '') : compactStockHtml(stockPos[code], meta.unit);
+    return `
+      <div class="pick-card${line ? ' in' : ''}" data-pick-code="${escapeHtml(code)}">
+        ${productThumb(p, 'xs')}
+        <div class="pk-t">
+          <div class="pk-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</div>
+          <div class="pk-sub">${escapeHtml(pack)}${stock ? ' · ' + stock : ''}</div>
+        </div>
+        <span class="pick-badge">${line ? escapeHtml(draftBadge(line)) : ''}</span>
+        <button type="button" class="stepper-btn" data-step="1" data-code="${escapeHtml(code)}" aria-label="Add ${escapeHtml(it.name)}">+</button>
+      </div>`;
+  }
+
+  // Re-rendered only when items are added or removed, so typing a quantity
+  // in a row never loses focus; quantity changes update the row in place.
+  let draftListKey = null;
+  function renderDraftList() {
+    const mount = form.querySelector('#ord_draftList');
+    if (!mount) return;
+    const key = draftLines.map(l => l.code).join('|');
+    if (key === draftListKey && mount.childElementCount) return;
+    draftListKey = key;
+    if (!draftLines.length) {
+      mount.innerHTML = `<div class="no-empty">Search on the right and press <strong>+</strong> to add products. They appear here, where you set the quantities.</div>`;
+      return;
+    }
+    mount.innerHTML = draftLines.map(l => {
+      const rowHtml = l.family ? (familyByCode(l.code) ? familyPickerRowHtml(familyByCode(l.code)) : '') : (productOf(l.code) ? productPickerRowHtml(productOf(l.code)) : '');
+      return `<div class="draft-item">${rowHtml}<button type="button" class="draft-remove" data-remove-draft="${escapeHtml(l.code)}" title="Remove from order" aria-label="Remove ${escapeHtml(l.name)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+    }).join('');
   }
 
   function productPickerRowHtml(p) {
@@ -756,6 +823,7 @@
   }
 
   function renderViewForm(order) {
+    dialogEl.classList.remove('dlg-wide');
     dirtyCheck = null; // every action here (allocate/remove/status) saves immediately — nothing unsaved to lose
     draftLines = []; // staged "add product" picks — never carries over between opens/refreshes of this dialog
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID);
