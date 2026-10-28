@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=34">
+<link rel="stylesheet" href="css/style.css?v=35">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -46,10 +46,18 @@
 
     <div class="live-divider"><span class="kicker">Right now</span></div>
 
+    <!-- Late deliveries (only shown when there are some) -->
+    <div class="section-gap" id="lateSection" hidden>
+      <div class="panel panel-late">
+        <div class="panel-h"><h3>Late deliveries</h3><span class="code" id="lateCount" style="margin-left:auto;"></span></div>
+        <div id="lateList"></div>
+      </div>
+    </div>
+
     <!-- Upcoming deliveries -->
     <div class="section-gap">
       <div class="panel" id="upcomingCard">
-        <div class="panel-h"><h3>Upcoming deliveries</h3></div>
+        <div class="panel-h"><h3 id="upcomingTitle">Deliveries this week</h3></div>
         <div id="upcomingList"></div>
       </div>
     </div>
@@ -290,32 +298,56 @@
     `;
   }
 
-  // Live: purchase orders still awaiting delivery, soonest expected first.
-  function renderUpcomingDeliveries() {
-    const list = document.getElementById('upcomingList');
-    const pos = dash.purchaseOrders
-      .filter(o => o.STATUS === 'Ordered' || !o.STATUS)
-      .sort((a, b) => (a['EXPECTED START DATE'] || '9999').localeCompare(b['EXPECTED START DATE'] || '9999'));
+  // Live, split by date: POs still awaiting delivery whose expected window
+  // falls in the current week, and — separately — open POs already past the
+  // end of their window (late), most overdue first. A PO due in a later week
+  // shows in neither; the week band above counts those.
+  function poRowHtml(po, late) {
+    const due = po['EXPECTED END DATE'] || po['EXPECTED START DATE'];
+    const daysLate = late ? Math.max(1, -daysUntil(due)) : 0;
+    return `
+      <a class="lrow" href="purchase-orders.html?open=${encodeURIComponent(po.ID)}" data-po-id="${escapeHtml(po.ID)}">
+        <div class="lrow-body">
+          <div class="lrow-name">${escapeHtml(po.SUPPLIER)} <span class="code" style="margin-left:6px;">${escapeHtml(po.ID)}</span></div>
+          <div class="lrow-meta">${late ? 'Was due ' : ''}${escapeHtml(fmtDateRange(po['EXPECTED START DATE'], po['EXPECTED END DATE']))} &middot; ${dash.poLineCountById[po.ID] || 0} item(s)</div>
+        </div>
+        <div class="lrow-side">
+          ${late ? `<span class="tag t-crit">${daysLate} day${daysLate === 1 ? '' : 's'} late</span>` : ''}
+          <span class="lrow-chev">${ICON_CHEVRON}</span>
+        </div>
+      </a>`;
+  }
 
-    if (!pos.length) {
+  function renderUpcomingDeliveries() {
+    const { start, end } = weekRange(0);
+    const startIso = isoDate(start), endIso = isoDate(end), todayIso = isoDate(new Date());
+    const open = dash.purchaseOrders.filter(o => o.STATUS === 'Ordered' || !o.STATUS);
+    const dueBy = po => po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '';
+    const late = open.filter(po => dueBy(po) && dueBy(po) < todayIso)
+      .sort((a, b) => dueBy(a).localeCompare(dueBy(b)));
+    const thisWeek = open.filter(po => !late.includes(po) && po['EXPECTED START DATE']
+        && rangesOverlap(po['EXPECTED START DATE'], dueBy(po), startIso, endIso))
+      .sort((a, b) => a['EXPECTED START DATE'].localeCompare(b['EXPECTED START DATE']));
+    const later = open.filter(po => !late.includes(po) && !thisWeek.includes(po)).length;
+
+    document.getElementById('lateSection').hidden = !late.length;
+    document.getElementById('lateCount').textContent = late.length || '';
+    document.getElementById('lateList').innerHTML = late.map(po => poRowHtml(po, true)).join('');
+
+    document.getElementById('upcomingTitle').textContent = `Deliveries this week · ${fmtWeekRange(start, end)}`;
+    const list = document.getElementById('upcomingList');
+    if (!thisWeek.length) {
       list.innerHTML = `
         <div class="empty-block">
           <div class="empty-icon">${ICON_BOX}</div>
-          <div class="empty-title">Nothing on order right now</div>
-          <div class="empty-sub">Deliveries you're expecting from suppliers will show up here.</div>
+          <div class="empty-title">No deliveries due this week</div>
+          <div class="empty-sub">${later ? `${later} purchase order(s) are due in later weeks — use the week arrows above to see them.` : "Deliveries you're expecting from suppliers will show up here."}</div>
           <a href="purchase-orders.html" class="btn ghost sm">+ New purchase order</a>
         </div>`;
       return;
     }
-    list.innerHTML = pos.map(po => `
-      <a class="lrow" href="purchase-orders.html?open=${encodeURIComponent(po.ID)}" data-po-id="${escapeHtml(po.ID)}">
-        <div class="lrow-body">
-          <div class="lrow-name">${escapeHtml(po.SUPPLIER)} <span class="code" style="margin-left:6px;">${escapeHtml(po.ID)}</span></div>
-          <div class="lrow-meta">${escapeHtml(fmtDateRange(po['EXPECTED START DATE'], po['EXPECTED END DATE']))} &middot; ${dash.poLineCountById[po.ID] || 0} item(s)</div>
-        </div>
-        <span class="lrow-chev">${ICON_CHEVRON}</span>
-      </a>
-    `).join('');
+    list.innerHTML = thisWeek.map(po => poRowHtml(po, false)).join('')
+      + (later ? `<div class="lrow-foot muted">${later} more purchase order(s) due in later weeks.</div>` : '');
   }
 
   // Live: open (not yet Dispatched) customer orders — clicking a row deep
@@ -414,7 +446,7 @@
     const prod = dash.productByCode[code];
     return { product: prod, name: prod ? prod['Product name'] : code, qty: qtyUnit(qty, unit) };
   };
-  attachOrderHoverCard(document.getElementById('upcomingList'), '[data-po-id]', el => {
+  const poHoverCard = el => {
     const o = dash && dash.purchaseOrders.find(p => p.ID === el.dataset.poId);
     if (!o) return null;
     return {
@@ -422,7 +454,9 @@
       meta: [`Expected ${fmtDateRange(o['EXPECTED START DATE'], o['EXPECTED END DATE'])}`, o.NOTES ? `Note: ${o.NOTES}` : ''],
       lines: dash.poLines.filter(l => l['PO ID'] === o.ID).map(l => hoverLine(l['PRODUCT CODE'], l['QTY ORDERED'], l.UNIT))
     };
-  });
+  };
+  attachOrderHoverCard(document.getElementById('upcomingList'), '[data-po-id]', poHoverCard);
+  attachOrderHoverCard(document.getElementById('lateList'), '[data-po-id]', poHoverCard);
   attachOrderHoverCard(document.getElementById('custOrdersList'), '[data-order-id]', el => {
     const o = dash && dash.orders.find(x => x.ID === el.dataset.orderId);
     if (!o) return null;
