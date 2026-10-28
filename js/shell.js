@@ -127,6 +127,13 @@
   function showExpired() {
     if (document.body.classList.contains('signed-out')) return;
     const b = ensureBanner();
+    // Signed in without the Google Sheets permission (js/config.js): say so,
+    // since Reconnect will show Google's permission screen this time.
+    let needsConsent = false;
+    try { needsConsent = localStorage.getItem(NEEDS_CONSENT_KEY) === '1'; } catch (e) {}
+    b.querySelector('.sb-text').innerHTML = needsConsent
+      ? `<strong>The app needs permission to use Google Sheets.</strong> Press Reconnect and tick the Google Sheets box on Google's screen.`
+      : `<strong>Your Google session has expired.</strong> Nothing you've typed is lost — reconnect and carry on.`;
     park(b);
     b.hidden = false;
   }
@@ -158,9 +165,9 @@
         onToken: () => { btn.disabled = false; onReconnected(false); },
         onError: msg => { btn.disabled = false; showToast(msg, 'error'); }
       });
-      const hint = getStoredUserInfo().email;
-      // With a hint Google can skip the account chooser and close the popup at once.
-      client.requestAccessToken(hint ? { prompt: '', login_hint: hint } : {});
+      // With a hint Google can skip the account chooser and close the popup at
+      // once — unless a permission was refused last time (see js/config.js).
+      client.requestAccessToken(signInRequest());
     } catch (e) {
       btn.disabled = false;
       showToast('Google sign-in is still loading — try again in a moment.', 'error');

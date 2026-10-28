@@ -78,6 +78,27 @@ async function fetchAndStoreUserInfo(token) {
   } catch (e) { /* badge falls back to a generic "Signed in" label */ }
 }
 
+// Google's consent screen lets people untick individual permissions. Signing
+// in without the Sheets one "works" but every read then fails with
+// "insufficient authentication scopes" and every page looks empty — so the
+// sign-in refuses such a token, explains, and the next attempt asks Google to
+// show the consent screen again (signInRequest below).
+const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+const NEEDS_CONSENT_KEY = 'provisions_needsConsent';
+const MISSING_SCOPE_MESSAGE = 'Google didn’t give the app access to Google Sheets, so it can’t read the stock sheet. Sign in again and, on Google’s screen, tick “See, edit, create and delete all your Google Sheets spreadsheets”.';
+
+function markNeedsConsent() { try { localStorage.setItem(NEEDS_CONSENT_KEY, '1'); } catch (e) {} }
+
+// Options for requestAccessToken(): the consent screen again after a refused
+// permission; otherwise the account hint so Google can skip the chooser.
+function signInRequest(fallback = {}) {
+  let needsConsent = false;
+  try { needsConsent = localStorage.getItem(NEEDS_CONSENT_KEY) === '1'; } catch (e) {}
+  const hint = getStoredUserInfo().email;
+  if (needsConsent) return hint ? { prompt: 'consent', login_hint: hint } : { prompt: 'consent' };
+  return hint ? { prompt: '', login_hint: hint } : fallback;
+}
+
 // Sets up a Google Identity Services token client.
 // onToken(token) fires on every successful sign-in (including a reconnect).
 // onError(message) also fires when the popup is blocked or closed.
@@ -92,6 +113,12 @@ function initGoogleAuth({ clientId, onToken, onError }) {
     scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
     callback: (resp) => {
       if (resp.error) { onError && onError(resp.error); return; }
+      if (!google.accounts.oauth2.hasGrantedAllScopes(resp, SHEETS_SCOPE)) {
+        markNeedsConsent();
+        onError && onError(MISSING_SCOPE_MESSAGE);
+        return;
+      }
+      try { localStorage.removeItem(NEEDS_CONSENT_KEY); } catch (e) {}
       storeToken(resp.access_token, resp.expires_in);
       fetchAndStoreUserInfo(resp.access_token).finally(() => { onToken && onToken(resp.access_token); });
     },

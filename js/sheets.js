@@ -20,6 +20,17 @@ async function googleFetch(url, opts = {}, _token) {
       let token = getStoredToken();
       if (!token && window.waitForReconnect) token = await window.waitForReconnect();
       const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token}` } });
+      // A token signed in without the Sheets permission (see js/config.js)
+      // gets a 403 "insufficient authentication scopes": treat it like an
+      // expired one, but have the reconnect show Google's consent screen.
+      if (res.status === 403 && attempt < 2 && window.waitForReconnect) {
+        const text = await res.clone().text();
+        if (/insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(text)) {
+          markNeedsConsent();
+          clearToken();
+          continue;
+        }
+      }
       if (res.status !== 401 || attempt >= 2 || !window.waitForReconnect) return res;
       clearToken();
     }

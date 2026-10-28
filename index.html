@@ -91,9 +91,9 @@
   </div>
 </main>
 
-<script src="js/config.js?v=4"></script>
-<script src="js/sheets.js?v=3"></script>
-<script src="js/shell.js?v=6"></script>
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=5"></script>
+<script src="js/shell.js?v=7"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script>
@@ -495,8 +495,7 @@
       },
       onError: (err) => setStatus(err, 'error')
     });
-    const hint = getStoredUserInfo().email;
-    tokenClient.requestAccessToken(hint ? { prompt: '', login_hint: hint } : { prompt: 'select_account' });
+    tokenClient.requestAccessToken(signInRequest({ prompt: 'select_account' }));
   });
 </script>
 </body>
