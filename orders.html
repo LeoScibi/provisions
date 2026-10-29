@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=38">
+<link rel="stylesheet" href="css/style.css?v=39">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -314,25 +314,25 @@
       <div class="dlg-b">
         <div class="no-grid">
           <div class="no-order">
-            <div class="row">
-              <div class="col field">
+            <div class="no-head">
+              <div class="field">
                 <label>Customer *</label>
                 <select id="ord_customer"><option value="">Select a customer…</option>${customers.map(c => `<option value="${escapeHtml(c['Customer name (as in Xero)'])}">${escapeHtml(c['Customer name (as in Xero)'])}</option>`).join('')}</select>
               </div>
-              <div class="col field">
-                <label>Delivery date *</label>
-                <input type="date" id="ord_deliveryDate">
-              </div>
-            </div>
-            <div class="row">
-              <div class="col field">
+              <div class="field">
                 <label>Order date</label>
                 <input type="date" id="ord_orderDate" value="${todayIso()}">
               </div>
-              <div class="col field">
+              <div class="field">
                 <label>Placed by *</label>
                 <input type="text" id="ord_placedBy" value="${escapeHtml(info.name || info.email || '')}" placeholder="Your name">
               </div>
+            </div>
+            <div class="field">
+              <label>Delivery week *</label>
+              <input type="hidden" id="ord_deliveryDate">
+              <div class="wk-chips" id="ord_weekChips" role="radiogroup" aria-label="Delivery week"></div>
+              <div class="day-chips" id="ord_dayChips" role="radiogroup" aria-label="Delivery day"></div>
             </div>
             <div class="no-list-h"><label>Order</label><span id="ord_orderSummary" class="mono"></span></div>
             <div id="ord_draftList" class="no-list"></div>
@@ -362,13 +362,22 @@
     enhanceSelect(customerSel);
 
     dirtyCheck = () => !!customerSel.value || draftLines.length > 0
-      || !!form.querySelector('#ord_notes').value.trim()
-      || !!form.querySelector('#ord_deliveryDate').value;
+      || !!form.querySelector('#ord_notes').value.trim();
+
+    // Delivery: pick a week; the customer's usual day in it is the date,
+    // unless a specific day is chosen (which also goes into the notes).
+    deliveryPick = { week: defaultDeliveryWeek(), day: null };
+    renderDeliveryPicker();
+    customerSel.addEventListener('change', renderDeliveryPicker);
 
     searchInput.addEventListener('input', () => renderProductPicker(undefined, undefined, [], undefined, true));
 
     form.onclick = (e) => {
       if (e.target.closest('[data-cancel]')) { guard.guardedClose(); return; }
+      const wk = e.target.closest('[data-week]');
+      if (wk) { deliveryPick = { week: parseInt(wk.dataset.week, 10), day: null }; renderDeliveryPicker(); return; }
+      const dy = e.target.closest('[data-day]');
+      if (dy && !dy.disabled) { const d = parseInt(dy.dataset.day, 10); deliveryPick.day = d === usualDeliveryDay() ? null : d; renderDeliveryPicker(); return; }
       const rmDraft = e.target.closest('[data-remove-draft]');
       if (rmDraft) { draftLines = draftLines.filter(l => l.code !== rmDraft.dataset.removeDraft); renderOrderSummary(); return; }
       const stepBtn = e.target.closest('[data-step]');
@@ -394,6 +403,62 @@
   // picker: `mountId`/`searchId`/`summaryId` point at whichever dialog is
   // open, and `excludeCodes` keeps products already on the order out of the
   // View dialog's picker (irrelevant — always empty — for a brand-new order).
+  // ---- delivery week picker (New Order) ----
+  //
+  // Orders go out weekly, so the picker offers weeks; the date saved is the
+  // customer's usual delivery day in the chosen week (Customers' "Delivery
+  // day", else Wednesday out of London / Thursday in London). Picking another
+  // day sets that date instead and adds "Requested delivery: Tue 3 Nov" to
+  // the notes, so it's seen on the slips. Defaults to this week, or next week
+  // once this week's cut-off (Tuesday midday) has passed.
+  const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const PICKER_WEEKS = 8;
+  const REQUESTED_PREFIX = 'Requested delivery: ';
+  let deliveryPick = { week: 0, day: null };
+
+  const mondayFrom = offset => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + (d.getDay() === 0 ? -6 : 1 - d.getDay()) + 7 * offset); return d; };
+  const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function defaultDeliveryWeek() {
+    const now = new Date(), day = now.getDay();
+    const pastCutoff = day === 0 || day >= 3 || (day === 2 && now.getHours() >= 12);
+    return pastCutoff ? 1 : 0;
+  }
+  function usualDeliveryDay() {
+    const c = customers.find(x => x['Customer name (as in Xero)'] === form.querySelector('#ord_customer')?.value);
+    const named = WEEKDAYS.indexOf(c?.['Delivery day']);
+    if (named >= 0) return named;
+    return c?.['Delivery zone'] === 'Out of London' ? 2 : 3;
+  }
+
+  function renderDeliveryPicker() {
+    const usual = usualDeliveryDay();
+    const monday = mondayFrom(deliveryPick.week);
+    const todayStr = todayIso();
+    const dayDate = i => { const d = new Date(monday); d.setDate(d.getDate() + i); return d; };
+    // A usual day already gone this week falls back to the next day still open.
+    let dayIdx = deliveryPick.day ?? usual;
+    while (isoLocal(dayDate(dayIdx)) < todayStr && dayIdx < 4) dayIdx++;
+    const range = d => { const e = new Date(d); e.setDate(e.getDate() + 6); return `${d.getDate()} ${d.toLocaleDateString('en-GB', { month: 'short' })}–${e.getDate()} ${e.toLocaleDateString('en-GB', { month: 'short' })}`; };
+    form.querySelector('#ord_weekChips').innerHTML = Array.from({ length: PICKER_WEEKS }, (_, w) => {
+      const m = mondayFrom(w);
+      const label = w === 0 ? 'This week' : w === 1 ? 'Next week' : `w/c ${m.getDate()} ${m.toLocaleDateString('en-GB', { month: 'short' })}`;
+      return `<button type="button" class="wk-chip${w === deliveryPick.week ? ' on' : ''}" data-week="${w}" role="radio" aria-checked="${w === deliveryPick.week}">
+        <span class="wk-l">${escapeHtml(label)}</span><span class="wk-r">${escapeHtml(range(m))}</span></button>`;
+    }).join('');
+    form.querySelector('#ord_dayChips').innerHTML = WEEKDAYS.map((name, i) => {
+      const d = dayDate(i), past = isoLocal(d) < todayStr;
+      return `<button type="button" class="day-chip${i === dayIdx ? ' on' : ''}${i === usual ? ' usual' : ''}" data-day="${i}" role="radio" aria-checked="${i === dayIdx}"${past ? ' disabled' : ''} title="${i === usual ? 'Usual delivery day for this customer' : 'Ask for this specific day'}">
+        ${name.slice(0, 3)} ${d.getDate()}${i === usual ? '<span class="usual-tag">usual</span>' : ''}</button>`;
+    }).join('');
+    const date = dayDate(dayIdx);
+    form.querySelector('#ord_deliveryDate').value = isoLocal(date);
+    // Keep one "Requested delivery:" line in the notes while a specific day is picked.
+    const notesEl = form.querySelector('#ord_notes');
+    const rest = notesEl.value.split('\n').filter(l => !l.startsWith(REQUESTED_PREFIX));
+    const specific = deliveryPick.day !== null && dayIdx !== usual;
+    notesEl.value = (specific ? [REQUESTED_PREFIX + date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })] : []).concat(rest).join('\n').trim();
+  }
+
   // `compact`: the New Order dialog's narrow search column — small cards
   // with a + button; quantities are then set in the order list beside it.
   function renderProductPicker(mountId = 'ord_productPicker', searchId = 'ord_productSearch', excludeCodes = [], summaryId = 'ord_orderSummary', compact = false) {
@@ -784,29 +849,34 @@
     const orderDate = form.querySelector('#ord_orderDate').value;
     const placedBy = form.querySelector('#ord_placedBy').value.trim();
     if (!customer) { setDlgStatus('Pick a customer.', 'error'); return; }
-    if (!deliveryDate) { setDlgStatus('Pick a delivery date.', 'error'); return; }
+    if (!deliveryDate) { setDlgStatus('Pick a delivery week.', 'error'); return; }
     if (!placedBy) { setDlgStatus('Enter who placed this order.', 'error'); return; }
     if (!draftLines.length) { setDlgStatus('Add at least one product.', 'error'); return; }
 
     setDlgStatus('Placing order...');
     try {
       const notes = form.querySelector('#ord_notes').value.trim();
-      const existingOrders = await sheetsGet(cfg.spreadsheetId, 'Orders!A:A', token);
+      const [existingOrders, existingLines] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'Orders!A:A', token),
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token)
+      ]);
       const orderId = nextId(existingOrders.length ? existingOrders : [['ID']], 'ORD');
-      await sheetsAppend(cfg.spreadsheetId, 'Orders!A:G', [orderId, orderDate, customer, deliveryDate, 'New', notes, placedBy], token);
-
-      const existingLines = await sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token);
       let base = existingLines.length ? existingLines : [['ID']];
-      const lineRows = expandDraftLines().map(l => {
+      const placed = expandDraftLines().map(l => {
         const lineId = nextId(base, 'OL');
         base = base.concat([[lineId]]);
-        return [lineId, orderId, l.code, l.qty, l.unit, 'New', ''];
+        return { ...l, lineId };
       });
-      await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', lineRows, token);
+      // Stock is allocated as the order is placed, so availability always
+      // reflects every order not yet dispatched.
+      const alloc = autoAllocate(placed, deliveryDate);
+      await sheetsAppend(cfg.spreadsheetId, 'Orders!A:G', [orderId, orderDate, customer, deliveryDate, alloc.short ? 'New' : 'Allocated', notes, placedBy], token);
+      await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', placed.map(l => [l.lineId, orderId, l.code, l.qty, l.unit, 'New', '']), token);
+      if (alloc.rows.length) await appendAllocations(cfg, alloc.rows);
 
       dialogEl.close();
-      setStatus(`Order ${orderId} created.`, 'ok');
-      loadAll();
+      await loadAll();
+      setStatus(alloc.short ? `Order ${orderId} created — ${alloc.short} line(s) short of stock: open it to replace them.` : `Order ${orderId} created and allocated.`, alloc.short ? 'error' : 'ok');
     } catch (err) {
       setDlgStatus('Error: ' + err.message, 'error');
     }
@@ -959,6 +1029,34 @@
           <button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button>
         </td>
       </tr>`;
+  }
+
+  // Allocations for lines just placed: each line not cut to order takes its
+  // stock first expiry, first out from what's free right now, skipping lots
+  // already past their best-before on the delivery date. Lines share one
+  // pool per product. Returns { rows (for appendAllocations), short: lines
+  // it couldn't fully fill }.
+  function autoAllocate(lines, deliveryDate) {
+    const pools = {};
+    const rows = [];
+    let short = 0;
+    lines.forEach(l => {
+      const p = productOf(l.code);
+      if (!p || p['Cut from (code)']) return;
+      const pool = pools[l.code] = pools[l.code] || computeAvailableBatches(l.code)
+        .filter(b => !b.bbe || !deliveryDate || b.bbe >= deliveryDate).map(b => ({ ...b }));
+      let left = roundQty(l.qty);
+      pool.forEach(b => {
+        if (left <= 0.0001) return;
+        const take = roundQty(Math.min(left, b.remaining));
+        if (take <= 0) return;
+        rows.push({ lineId: l.lineId, code: l.code, batch: b.batch, qty: take });
+        b.remaining = roundQty(b.remaining - take);
+        left = roundQty(left - take);
+      });
+      if (left > 0.0001) short++;
+    });
+    return { rows, short };
   }
 
   // FEFO split of `qty` over a product's free lots: [{ batch, bbe, take }].
@@ -1267,14 +1365,17 @@
     try {
       const existingLines = await sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token);
       let base = existingLines.length ? existingLines : [['ID']];
-      const lineRows = expandDraftLines().map(l => {
+      const placed = expandDraftLines().map(l => {
         const lineId = nextId(base, 'OL');
         base = base.concat([[lineId]]);
-        return [lineId, order.obj.ID, l.code, l.qty, l.unit, 'New', ''];
+        return { ...l, lineId };
       });
-      await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', lineRows, token);
+      await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', placed.map(l => [l.lineId, order.obj.ID, l.code, l.qty, l.unit, 'New', '']), token);
+      const alloc = autoAllocate(placed, order.obj['DELIVERY DATE']);
+      if (alloc.rows.length) await appendAllocations(cfg, alloc.rows);
       draftLines = [];
       await refreshAfterAllocationChange(order.obj.ID);
+      if (alloc.short) setDlgStatus(`Added — ${alloc.short} line(s) short of stock. Use Replace to swap them.`, 'error');
     } catch (err) {
       setDlgStatus('Error: ' + err.message, 'error');
     }

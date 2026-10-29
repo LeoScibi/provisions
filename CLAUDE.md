@@ -109,7 +109,14 @@ models, sheet schemas, or conventions between the two.
   OrderLines row in pieces (`expandDraftLines()`).
 - **Orders** / **OrderLines** / **Allocations** — order header (including
   `PLACED BY`, appended to Orders' headers), order lines, and stock
-  allocated to each line. In the order dialog each line shows its free stock;
+  allocated to each line. Stock is allocated when an order is placed (and when lines
+  are added): `autoAllocate()` in `orders.html` takes each non-cut line FEFO
+  from free stock, skipping lots past their best-before on the delivery
+  date, and the order goes straight to Allocated when nothing is short — so
+  free stock always reflects every undispatched order. New Order picks a
+  delivery *week*; the date saved is the customer's usual day in it
+  (Customers' Delivery day, else Wed out of London / Thu London), and picking
+  another day adds "Requested delivery: …" to the notes. In the order dialog each line shows its free stock;
   **Allocate** opens a pop-up of lots (FEFO-prefilled), **Allocate all**
   fills every line FEFO from a shared pool, and **Replace** swaps a line's
   product: the line keeps its original code in OrderLines.`REPLACES` (shown as
