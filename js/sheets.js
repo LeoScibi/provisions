@@ -102,6 +102,18 @@ async function sheetsBatchUpdateValues(spreadsheetId, data, token, valueInputOpt
   return sheetsHandle(res);
 }
 
+// Deletes rows (1-based sheet row numbers) from one tab, highest first so
+// each delete leaves the others' positions untouched.
+async function sheetsDeleteRows(spreadsheetId, tabTitle, rowNumbers) {
+  if (!rowNumbers.length) return;
+  const tabs = await sheetsGetTabs(spreadsheetId);
+  const sheetId = tabs.find(t => t.title === tabTitle)?.sheetId;
+  if (sheetId === undefined) throw new Error(`${tabTitle} tab not found — run Setup first.`);
+  const requests = [...new Set(rowNumbers)].sort((a, b) => b - a)
+    .map(rn => ({ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rn - 1, endIndex: rn } } }));
+  await sheetsBatchUpdate(spreadsheetId, requests);
+}
+
 // Returns [{ sheetId, title }] for every tab in the spreadsheet.
 async function sheetsGetTabs(spreadsheetId, token) {
   const url = `${sheetsBaseUrl(spreadsheetId)}?fields=sheets.properties(sheetId,title)`;

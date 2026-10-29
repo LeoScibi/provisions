@@ -37,7 +37,8 @@ function computeStockByProduct(deliveries, allocations) {
 // - allocated: allocated to orders not dispatched yet (still here, but spoken for);
 // - free:      inStock − allocated, i.e. what a new order can still take;
 // - incoming:  lines on POs still "Ordered", each with its expected dates,
-//              soonest first.
+//              soonest first; `qty` is what's not yet reserved for an order
+//              (`reserved` is the rest — see Allocations' PO LINE ID).
 // Takes header-keyed row objects for each tab.
 //
 // Returns { [productCode]: { inStock, allocated, free, incoming: [{ qty, unit, poId, supplier, start, end }] } }
@@ -52,9 +53,12 @@ function computeStockPosition({ deliveries, allocations, orders, orderLines, pur
   orders.forEach(o => { statusByOrder[o.ID] = o.STATUS; });
   const orderByLine = {};
   orderLines.forEach(l => { orderByLine[l.ID] = l['ORDER ID']; });
+  const reservedByPoLine = {};
   allocations.forEach(a => {
-    const p = get(a['PRODUCT CODE']);
     const qty = num(a['QTY ALLOCATED']);
+    // A reservation on stock still arriving: not on the shelf yet.
+    if (a['PO LINE ID']) { reservedByPoLine[a['PO LINE ID']] = (reservedByPoLine[a['PO LINE ID']] || 0) + qty; return; }
+    const p = get(a['PRODUCT CODE']);
     if (statusByOrder[orderByLine[a['ORDER LINE ID']]] === 'Dispatched') p.inStock -= qty;
     else p.allocated += qty;
   });
@@ -66,8 +70,9 @@ function computeStockPosition({ deliveries, allocations, orders, orderLines, pur
   poLines.forEach(l => {
     const po = openPo[l['PO ID']];
     if (!po) return;
+    const reserved = reservedByPoLine[l.ID] || 0;
     get(l['PRODUCT CODE']).incoming.push({
-      qty: num(l['QTY ORDERED']), unit: l.UNIT, poId: po.ID, supplier: po.SUPPLIER,
+      qty: Math.max(0, num(l['QTY ORDERED']) - reserved), reserved, unit: l.UNIT, poId: po.ID, supplier: po.SUPPLIER,
       start: po['EXPECTED START DATE'] || '', end: po['EXPECTED END DATE'] || ''
     });
   });

@@ -34,7 +34,7 @@
 </main>
 
 <script src="js/config.js?v=5"></script>
-<script src="js/sheets.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
 <script src="js/shell.js?v=7"></script>
 <script>
   // Data model:
@@ -86,6 +86,9 @@
   //                drop), set by dragging packing slips on lists.html.
   //                BOXES is the packer's box count, typed on the same
   //                slips; it sets how many box labels print.
+  //   Allocations — PO LINE ID set (and no lot) = a reservation on stock
+  //                still arriving on that purchase order line; goods-in
+  //                turns it into real lot allocations (purchase-orders.html).
   //   Allocations — links an order line to a specific delivered batch/lot
   //                and quantity. This is the stock-OUT event, done from
   //                orders.html's order-view dialog: each line shows its
@@ -151,7 +154,7 @@
     },
     {
       title: 'Allocations',
-      headers: ['ID','ORDER LINE ID','PRODUCT CODE','BATCH/LOT NUMBER','QTY ALLOCATED','ALLOCATED DATE','NOTES']
+      headers: ['ID','ORDER LINE ID','PRODUCT CODE','BATCH/LOT NUMBER','QTY ALLOCATED','ALLOCATED DATE','NOTES','PO LINE ID']
     },
     {
       title: 'StockTakes',

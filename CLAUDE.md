@@ -113,7 +113,14 @@ models, sheet schemas, or conventions between the two.
   are added): `autoAllocate()` in `orders.html` takes each non-cut line FEFO
   from free stock, skipping lots past their best-before on the delivery
   date, and the order goes straight to Allocated when nothing is short — so
-  free stock always reflects every undispatched order. New Order picks a
+  free stock always reflects every undispatched order. Whatever the shelf
+  can't cover is **reserved on open POs** due before the delivery date: an
+  Allocations row with `PO LINE ID` set and no lot ("Reserved · PO295" on the
+  line, "Awaiting PO295" on slips). Reservations count as allocated but not as
+  shelf stock (`computeStockPosition` shows only unreserved incoming). At
+  goods-in `resolveReservations()` in `purchase-orders.html` turns them into
+  real lot allocations, first placed first served; what a short delivery or a
+  cancelled PO can't cover is released and the order drops back to New. New Order picks a
   delivery *week*; the date saved is the customer's usual day in it
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
   another day adds "Requested delivery: …" to the notes. In the order dialog each line shows its free stock;

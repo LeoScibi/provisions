@@ -531,6 +531,8 @@ dialog .session-banner{top:12px}
 .line-actions{white-space:nowrap;text-align:right}
 .line-actions .btn+.btn{margin-left:4px}
 .btn.ghost.attn{border-color:var(--warn);color:var(--warn)}
+.reserved-note{font-size:11.5px;color:var(--chill);font-weight:500;margin-top:2px}
+.incoming-note{font-size:10.5px;color:var(--chill)}
 .replaced-note{font-size:11.5px;color:var(--warn);font-weight:500;margin-top:2px}
 #orderDialog{max-width:960px}
 /* New Order: order on the left (2 parts), product search on the right (1 part) */

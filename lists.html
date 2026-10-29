@@ -43,7 +43,7 @@
   </div>
 </main>
 <script src="js/config.js?v=5"></script>
-<script src="js/sheets.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
 <script src="js/shell.js?v=7"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
@@ -134,13 +134,15 @@
     setStatus('Loading...');
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
-      const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows] = await Promise.all([
+      const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token)
+        sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token)
       ]);
 
       const productByCode = {};
@@ -167,6 +169,11 @@
         lines: toObjects(lineRows),
         allocs: toObjects(allocRows),
         productByCode, deliveryByKey, customerByName,
+        // PO line → its PO, for lines held by a reservation on stock still arriving.
+        poOfLine: (() => {
+          const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
+          return Object.fromEntries(toObjects(polRows).map(l => [l.ID, pos[l['PO ID']] || { ID: l['PO ID'] }]));
+        })(),
         dropCol: dropIdx >= 0 ? colLetter(dropIdx + 1) : null,
         boxesCol: boxesIdx >= 0 ? colLetter(boxesIdx + 1) : null
       };
@@ -263,6 +270,10 @@
       const ordered = parseFloat(l['QTY ORDERED']) || 0;
       const isCut = !!(prod && prod['Cut from (code)']);
       const lots = data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => {
+        if (a['PO LINE ID']) {
+          const po = data.poOfLine[a['PO LINE ID']] || {};
+          return { awaiting: po.ID || 'PO', due: po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '', qty: parseFloat(a['QTY ALLOCATED']) || 0 };
+        }
         const del = data.deliveryByKey[`${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`];
         return { lot: a['BATCH/LOT NUMBER'], qty: parseFloat(a['QTY ALLOCATED']) || 0, bbe: del ? del['BEST BEFORE DATE'] : '' };
       });
@@ -381,7 +392,9 @@
     const cust = data.customerByName[order.CUSTOMER] || {};
     const lines = packLines(order);
     const fromHtml = l => l.isCut ? '<span class="tag t-chill">Cut piece · fridge</span>'
-      : l.lots.length ? l.lots.map(x => `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
+      : l.lots.length ? l.lots.map(x => x.awaiting
+          ? `<span class="tag t-warn" title="Reserved on a purchase order not received yet">Awaiting ${escapeHtml(x.awaiting)}${x.due ? ' · ' + escapeHtml(fmtDateShort(x.due)) : ''}</span>`
+          : `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
       : '<span class="tag t-warn">Not allocated</span>';
     return `
       <div class="panel slip" data-order-id="${escapeHtml(order.ID)}"${drop ? ' draggable="true"' : ''}>
@@ -552,7 +565,7 @@
               <td>${escapeHtml(l.name)}${l.replaces ? `<div class="dn-replaces">Replaces ${escapeHtml(l.replaces)}</div>` : ''}</td>
               <td>${escapeHtml(l.code)}</td>
               <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
-              <td>${l.isCut ? 'Cut to order' : l.lots.map(x => `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
+              <td>${l.isCut ? 'Cut to order' : l.lots.map(x => x.awaiting ? 'Awaiting delivery' : `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
             </tr>`).join('')}</tbody></table>
           ${o.NOTES ? `<div class="dn-notes"><span class="dn-k">Notes</span> ${escapeHtml(o.NOTES)}</div>` : ''}
           <div class="dn-sign">
