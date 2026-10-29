@@ -251,7 +251,11 @@
           customer: order.CUSTOMER,
           zone: zoneOf(order),
           orderId: order.ID,
-          cutLife: prod['Cut shelf life (days)']
+          cutLife: prod['Cut shelf life (days)'],
+          // The wheel lot(s) this piece was allocated from, when it has been.
+          lots: data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
+            ? `awaiting ${(data.poOfLine[a['PO LINE ID']] || {}).ID || 'PO'}`
+            : a['BATCH/LOT NUMBER'])
         });
       });
     });
@@ -332,7 +336,7 @@
               <span class="muted" style="margin-left:auto; font-size:13px;">${pieces} piece(s) to cut · ≈ ${kg.toFixed(1)} kg</span>
             </div>
             <div class="scroll" style="overflow-x:auto;">
-              <table><thead><tr><th class="tick-col"></th><th>Portion</th><th class="num">Qty</th><th>Label for</th><th>Zone</th><th>Life after cut</th><th class="no-print">Order</th></tr></thead>
+              <table><thead><tr><th class="tick-col"></th><th>Portion</th><th class="num">Qty</th><th>Label for</th><th>Zone</th><th>Wheel lot</th><th>Life after cut</th><th class="no-print">Order</th></tr></thead>
               <tbody>${g.rows.map(r => `
                 <tr>
                   <td class="tick-col"><span class="tick-box"></span></td>
@@ -340,6 +344,7 @@
                   <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}</td>
                   <td>${escapeHtml(r.customer)}</td>
                   <td>${zoneTag(r.zone)}</td>
+                  <td class="code">${r.lots.length ? r.lots.map(escapeHtml).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
                   <td>${r.cutLife ? r.cutLife + ' day(s)' : '—'}</td>
                   <td class="no-print">${orderLink(r.orderId)}</td>
                 </tr>`).join('')}
@@ -391,11 +396,11 @@
   function slipHtml(order, drop) {
     const cust = data.customerByName[order.CUSTOMER] || {};
     const lines = packLines(order);
-    const fromHtml = l => l.isCut ? '<span class="tag t-chill">Cut piece · fridge</span>'
-      : l.lots.length ? l.lots.map(x => x.awaiting
-          ? `<span class="tag t-warn" title="Reserved on a purchase order not received yet">Awaiting ${escapeHtml(x.awaiting)}${x.due ? ' · ' + escapeHtml(fmtDateShort(x.due)) : ''}</span>`
-          : `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>')
-      : '<span class="tag t-warn">Not allocated</span>';
+    const lotsHtml = l => l.lots.map(x => x.awaiting
+      ? `<span class="tag t-warn" title="Reserved on a purchase order not received yet">Awaiting ${escapeHtml(x.awaiting)}${x.due ? ' · ' + escapeHtml(fmtDateShort(x.due)) : ''}</span>`
+      : `<span class="code">${escapeHtml(x.lot)}</span>${x.bbe ? ` <span class="muted">BB ${escapeHtml(fmtDateShort(x.bbe))}</span>` : ''}`).join('<br>');
+    const fromHtml = l => l.isCut ? `<span class="tag t-chill">Cut piece · fridge</span>${l.lots.length ? '<br>' + lotsHtml(l) : ''}`
+      : l.lots.length ? lotsHtml(l) : '<span class="tag t-warn">Not allocated</span>';
     return `
       <div class="panel slip" data-order-id="${escapeHtml(order.ID)}"${drop ? ' draggable="true"' : ''}>
         <div class="slip-h">
@@ -565,7 +570,7 @@
               <td>${escapeHtml(l.name)}${l.replaces ? `<div class="dn-replaces">Replaces ${escapeHtml(l.replaces)}</div>` : ''}</td>
               <td>${escapeHtml(l.code)}</td>
               <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
-              <td>${l.isCut ? 'Cut to order' : l.lots.map(x => x.awaiting ? 'Awaiting delivery' : `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
+              <td>${l.isCut ? 'Cut to order' + (l.lots.length ? '<br>' : '') : ''}${l.lots.map(x => x.awaiting ? 'Awaiting delivery' : `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
             </tr>`).join('')}</tbody></table>
           ${o.NOTES ? `<div class="dn-notes"><span class="dn-k">Notes</span> ${escapeHtml(o.NOTES)}</div>` : ''}
           <div class="dn-sign">

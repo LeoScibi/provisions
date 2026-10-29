@@ -128,9 +128,13 @@ models, sheet schemas, or conventions between the two.
   fills every line FEFO from a shared pool, and **Replace** swaps a line's
   product: the line keeps its original code in OrderLines.`REPLACES` (shown as
   "replaces …" on packing slips and delivery notes), its old allocations are
-  released and the new product is allocated FEFO. Cut-to-order lines take no
-  allocation and don't hold an order back from Allocated; replacements are
-  never cut products, so the cutting list doesn't change. All three are managed entirely from
+  released and the new product is allocated FEFO. A cut-to-order line (a portion "Cut
+  from" a whole) is allocated from its **whole wheel, in kilos**
+  (`stockSource()` in `orders.html`: pieces × the portion's nominal kg), each
+  piece from one wheel lot where possible — so pending cheese orders reduce
+  the wheel's free stock, and the cutting list shows the wheel lot to cut
+  from. Replacements are never cut products, so the cutting list doesn't
+  change. All three are managed entirely from
   `orders.html`'s order-view dialog — see the bullet above.
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's

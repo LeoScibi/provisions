@@ -979,20 +979,33 @@
   // and never holds the order back from Allocated.
 
   const isCutLine = l => { const p = productOf(l['PRODUCT CODE']); return !!(p && p['Cut from (code)']); };
+  // Where a line's stock comes from. A cut portion holds none of its own: it
+  // draws kilos from the whole it's cut from (1 × "1/16 wheel 2.3kg" = 2.3kg
+  // of CCH001W), so pending cheese orders take wheel stock like anything
+  // else. Everything else draws its own code, in its own unit.
+  function stockSource(code) {
+    const p = productOf(code);
+    const parent = p && p['Cut from (code)'] ? productOf(p['Cut from (code)']) : null;
+    if (parent) return { code: parent['Product code'], perUnit: parseFloat(p['Nominal weight (kg)']) || 0, unit: 'kg', cut: true };
+    return { code, perUnit: 1, unit: null, cut: false };
+  }
+  const sourceUnit = (src, l) => src.unit || l.UNIT;
+  const lineNeed = l => roundQty((parseFloat(l['QTY ORDERED']) || 0) * stockSource(l['PRODUCT CODE']).perUnit);
   const allocatedFor = lineId => allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId)
     .reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
-  const outstandingFor = l => Math.max(0, roundQty((parseFloat(l['QTY ORDERED']) || 0) - allocatedFor(l.ID)));
+  const outstandingFor = l => Math.max(0, roundQty(lineNeed(l) - allocatedFor(l.ID)));
   const freeStock = code => roundQty(computeAvailableBatches(code).reduce((s, b) => s + b.remaining, 0));
   const fmtQty = (n, unit) => qtyUnit(roundQty(n), unit);
 
   function allocSummary(lines) {
-    const need = lines.filter(l => !isCutLine(l.obj));
+    const need = lines.filter(l => lineNeed(l.obj) > 0);
     const ready = need.filter(l => outstandingFor(l.obj) <= 0.0001).length;
-    const cut = lines.length - need.length;
-    return `${ready} of ${need.length} line(s) allocated${cut ? ` · ${cut} cut to order` : ''}`;
+    return `${ready} of ${need.length} line(s) allocated`;
   }
-  const canAllocateAll = lines => lines.some(l => !isCutLine(l.obj) && outstandingFor(l.obj) > 0.0001
-    && (freeStock(l.obj['PRODUCT CODE']) > 0.0001 || incomingPool(l.obj['PRODUCT CODE'], currentOrderDate(l.obj)).length));
+  const canAllocateAll = lines => lines.some(l => {
+    const src = stockSource(l.obj['PRODUCT CODE']);
+    return outstandingFor(l.obj) > 0.0001 && (freeStock(src.code) > 0.0001 || incomingPool(src.code, currentOrderDate(l.obj)).length);
+  });
   const currentOrderDate = l => ordersData.find(r => r.obj.ID === l['ORDER ID'])?.obj['DELIVERY DATE'] || '';
 
   function renderLineRow(line) {
@@ -1000,39 +1013,43 @@
     const code = l['PRODUCT CODE'];
     const ordered = parseFloat(l['QTY ORDERED']) || 0;
     const replaced = l.REPLACES ? `<div class="replaced-note">Replaces ${escapeHtml(productName(l.REPLACES))}</div>` : '';
-    const nameCell = productCell(productOf(code), `${escapeHtml(productName(code))}<br><span class="code">${escapeHtml(code)}</span>${replaced}`);
-    if (isCutLine(l)) {
+    const src = stockSource(code);
+    const unit = sourceUnit(src, l);
+    const fromWheel = src.cut ? `<div class="incoming-note">Cut from ${escapeHtml(src.code)} · ${escapeHtml(fmtQty(lineNeed(l), 'kg'))}</div>` : '';
+    const nameCell = productCell(productOf(code), `${escapeHtml(productName(code))}<br><span class="code">${escapeHtml(code)}</span>${fromWheel}${replaced}`);
+    if (src.cut && !src.perUnit) {
+      // A portion with no nominal weight can't be turned into wheel kilos.
       return `
         <tr>
           <td>${nameCell}</td>
           <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
           <td class="num muted">—</td>
           <td class="num muted">—</td>
-          <td><span class="tag t-chill">Cut to order</span></td>
+          <td><span class="tag t-chill" title="No nominal weight on this portion, so it can't be allocated from the wheel">Cut to order</span></td>
           <td class="line-actions"><button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button></td>
         </tr>`;
     }
     const allocated = allocatedFor(l.ID);
     const outstanding = outstandingFor(l);
-    const free = freeStock(code);
-    const incoming = incomingPool(code, currentOrderDate(l));
+    const free = freeStock(src.code);
+    const incoming = incomingPool(src.code, currentOrderDate(l));
     const incomingFree = roundQty(incoming.reduce((s, x) => s + x.remaining, 0));
     const ready = outstanding <= 0.0001;
     const short = !ready && free + incomingFree + 0.0001 < outstanding;
     const reservations = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID && a.obj['PO LINE ID']);
-    const reservedNote = reservations.length ? `<div class="reserved-note">${reservations.map(a => { const i = poLineInfo(a.obj['PO LINE ID']); return `Reserved ${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, l.UNIT))} · ${escapeHtml(i.poId)}${i.due ? ' due ' + escapeHtml(fmtDateShort(i.due)) : ''}`; }).join('<br>')}</div>` : '';
+    const reservedNote = reservations.length ? `<div class="reserved-note">${reservations.map(a => { const i = poLineInfo(a.obj['PO LINE ID']); return `Reserved ${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, unit))} · ${escapeHtml(i.poId)}${i.due ? ' due ' + escapeHtml(fmtDateShort(i.due)) : ''}`; }).join('<br>')}</div>` : '';
     const statusBadge = ready ? (reservations.length ? '<span class="tag t-chill" title="Partly or fully held on stock still arriving">Reserved</span>' : '<span class="tag t-ok">Ready</span>')
       : (allocated > 0 ? '<span class="tag t-warn">Partial</span>' : '<span class="tag t-crit">Unallocated</span>');
     return `
       <tr>
         <td>${nameCell}${reservedNote}</td>
         <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
-        <td class="num ${short ? 'neg' : ''}" title="${short ? 'Not enough free stock, on the shelf or arriving in time, to fill this line' : 'Free stock not yet allocated to any order'}">${escapeHtml(fmtQty(free, l.UNIT))}${incomingFree > 0 ? `<div class="incoming-note">+${escapeHtml(fmtQty(incomingFree, l.UNIT))} due</div>` : ''}</td>
-        <td class="num">${escapeHtml(fmtQty(allocated, l.UNIT))}</td>
+        <td class="num ${short ? 'neg' : ''}" title="${short ? 'Not enough free stock, on the shelf or arriving in time, to fill this line' : (src.cut ? `Free kilos of ${src.code} not yet allocated to any order` : 'Free stock not yet allocated to any order')}">${escapeHtml(fmtQty(free, unit))}${incomingFree > 0 ? `<div class="incoming-note">+${escapeHtml(fmtQty(incomingFree, unit))} due</div>` : ''}</td>
+        <td class="num">${escapeHtml(fmtQty(allocated, unit))}</td>
         <td>${statusBadge}</td>
         <td class="line-actions">
           <button type="button" class="btn ghost sm" data-open-alloc="${escapeHtml(l.ID)}">${ready ? 'Lots' : 'Allocate'}</button>
-          <button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>
+          ${src.cut ? '' : `<button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>`}
           <button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button>
         </td>
       </tr>`;
@@ -1050,17 +1067,33 @@
     const rows = [];
     let short = 0;
     lines.forEach(l => {
-      const p = productOf(l.code);
-      if (!p || p['Cut from (code)']) return;
-      const shelf = shelfPools[l.code] = shelfPools[l.code] || computeAvailableBatches(l.code)
+      if (!productOf(l.code)) return;
+      // `inStockUnits`: qty is already in the source's unit (e.g. an
+      // outstanding amount); otherwise a cut portion's pieces become kilos.
+      const src = stockSource(l.code);
+      if (!src.perUnit) return;
+      const code = src.code;
+      const shelf = shelfPools[code] = shelfPools[code] || computeAvailableBatches(code)
         .filter(b => !b.bbe || !deliveryDate || b.bbe >= deliveryDate).map(b => ({ ...b }));
-      const incoming = poPools[l.code] = poPools[l.code] || incomingPool(l.code, deliveryDate);
-      let left = roundQty(l.qty);
+      const incoming = poPools[code] = poPools[code] || incomingPool(code, deliveryDate);
+      let left = roundQty(l.inStockUnits ? l.qty : l.qty * src.perUnit);
+      // A cut piece comes off one wheel: take each whole piece from the
+      // earliest-dated lot that still has enough for it, and only split a
+      // piece across lots (below) when no single lot can cover it.
+      if (src.cut) {
+        while (left + 0.0001 >= src.perUnit) {
+          const b = shelf.find(x => x.remaining + 0.0001 >= src.perUnit);
+          if (!b) break;
+          rows.push({ lineId: l.lineId, code, batch: b.batch, qty: src.perUnit });
+          b.remaining = roundQty(b.remaining - src.perUnit);
+          left = roundQty(left - src.perUnit);
+        }
+      }
       shelf.forEach(b => {
         if (left <= 0.0001) return;
         const take = roundQty(Math.min(left, b.remaining));
         if (take <= 0) return;
-        rows.push({ lineId: l.lineId, code: l.code, batch: b.batch, qty: take });
+        rows.push({ lineId: l.lineId, code, batch: b.batch, qty: take });
         b.remaining = roundQty(b.remaining - take);
         left = roundQty(left - take);
       });
@@ -1068,13 +1101,19 @@
         if (left <= 0.0001) return;
         const take = roundQty(Math.min(left, x.remaining));
         if (take <= 0) return;
-        rows.push({ lineId: l.lineId, code: l.code, poLineId: x.poLineId, qty: take });
+        rows.push({ lineId: l.lineId, code, poLineId: x.poLineId, qty: take });
         x.remaining = roundQty(x.remaining - take);
         left = roundQty(left - take);
       });
       if (left > 0.0001) short++;
     });
-    return { rows, short };
+    // Two pieces off the same lot (or PO line) for one order line = one row.
+    const merged = [];
+    rows.forEach(r => {
+      const same = merged.find(m => m.lineId === r.lineId && m.code === r.code && (m.batch || '') === (r.batch || '') && (m.poLineId || '') === (r.poLineId || ''));
+      if (same) same.qty = roundQty(same.qty + r.qty); else merged.push({ ...r });
+    });
+    return { rows: merged, short };
   }
 
   // What's still unreserved on open purchase order lines for a product, due
@@ -1120,8 +1159,8 @@
   }
 
   async function handleAllocateAll(order) {
-    const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && !isCutLine(l.obj));
-    const { rows } = autoAllocate(lines.map(({ obj: l }) => ({ lineId: l.ID, code: l['PRODUCT CODE'], qty: outstandingFor(l) }))
+    const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID);
+    const { rows } = autoAllocate(lines.map(({ obj: l }) => ({ lineId: l.ID, code: l['PRODUCT CODE'], qty: outstandingFor(l), inStockUnits: true }))
       .filter(l => l.qty > 0.0001), order.obj['DELIVERY DATE']);
     if (!rows.length) { setDlgStatus('Nothing more can be allocated from stock in hand or on its way.', 'error'); return; }
     const cfg = await ensureAuth(setDlgStatus);
@@ -1130,7 +1169,7 @@
     try {
       await appendAllocations(cfg, rows);
       await refreshAfterAllocationChange(order.obj.ID);
-      const left = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && !isCutLine(l.obj) && outstandingFor(l.obj) > 0.0001).length;
+      const left = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && outstandingFor(l.obj) > 0.0001).length;
       setDlgStatus(left ? `Allocated what's in stock — ${left} line(s) still short. Use Replace to swap them.` : 'Every line is allocated.', left ? 'error' : 'ok');
     } catch (err) {
       setDlgStatus('Error: ' + err.message, 'error');
@@ -1144,7 +1183,10 @@
   function openAllocDialog(order, lineId) {
     const line = orderLinesData.find(l => l.obj.ID === lineId);
     if (!line) return;
-    const l = line.obj, code = l['PRODUCT CODE'];
+    const l = { ...line.obj };
+    const src = stockSource(l['PRODUCT CODE']);
+    const code = src.code;                 // what the stock is drawn from
+    l.UNIT = sourceUnit(src, line.obj);    // and in what unit (kg for a wheel)
     const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId);
     const outstanding = outstandingFor(l);
     const lots = computeAvailableBatches(code);
@@ -1158,8 +1200,8 @@
     allocForm.innerHTML = `
       <div class="dlg-h">
         <div>
-          <div class="ttl" style="font-size:22px;">${escapeHtml(productName(code))}</div>
-          <div class="subtitle">${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))} · allocated ${escapeHtml(fmtQty(allocatedFor(lineId), l.UNIT))} · still needed <strong>${escapeHtml(fmtQty(outstanding, l.UNIT))}</strong></div>
+          <div class="ttl" style="font-size:22px;">${escapeHtml(productName(l['PRODUCT CODE']))}</div>
+          <div class="subtitle">${src.cut ? `Cut from ${escapeHtml(productName(code))} · ` : ''}${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(src.cut ? `${parseFloat(line.obj['QTY ORDERED']) || 0} × ${fmtQty(src.perUnit, 'kg')}` : fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))} · allocated ${escapeHtml(fmtQty(allocatedFor(lineId), l.UNIT))} · still needed <strong>${escapeHtml(fmtQty(outstanding, l.UNIT))}</strong></div>
         </div>
         <button type="button" class="dlg-close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
@@ -1226,14 +1268,14 @@
       if (qty <= 0) continue;
       const lot = lots.find(b => b.batch === input.dataset.take);
       if (qty > lot.remaining + 0.0001) { status.textContent = `Lot ${lot.batch} only has ${fmtQty(lot.remaining, lot.unit)} free.`; status.style.color = 'var(--crit)'; return; }
-      rows.push({ lineId: l.ID, code: l['PRODUCT CODE'], batch: lot.batch, qty });
+      rows.push({ lineId: l.ID, code: stockSource(l['PRODUCT CODE']).code, batch: lot.batch, qty });
     }
     for (const input of allocForm.querySelectorAll('[data-take-po]')) {
       const qty = roundQty(parseFloat(input.value) || 0);
       if (qty <= 0) continue;
       const x = incoming.find(i => i.poLineId === input.dataset.takePo);
       if (qty > x.remaining + 0.0001) { status.textContent = `${x.poId} only has ${fmtQty(x.remaining, l.UNIT)} unreserved.`; status.style.color = 'var(--crit)'; return; }
-      rows.push({ lineId: l.ID, code: l['PRODUCT CODE'], poLineId: x.poLineId, qty });
+      rows.push({ lineId: l.ID, code: stockSource(l['PRODUCT CODE']).code, poLineId: x.poLineId, qty });
     }
     if (!rows.length) return;
     const cfg = await ensureAuth(setDlgStatus);
@@ -1511,8 +1553,7 @@
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === orderId);
     if (!lines.length) return;
     const fullyAllocated = lines.every(l => {
-      if (isCutLine(l.obj)) return true; // cut at the bench, not allocated
-      const ordered = parseFloat(l.obj['QTY ORDERED']) || 0;
+      const ordered = lineNeed(l.obj); // a cut portion needs kilos of its wheel
       const allocated = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.obj.ID).reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
       return allocated + 0.0001 >= ordered;
     });
