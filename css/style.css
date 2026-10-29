@@ -575,6 +575,36 @@ dialog .session-banner{top:12px}
 .slip-line .sl-name .sl-replaces{white-space:normal}
 .dn-replaces{font-size:10pt;font-style:italic;color:#444}
 
+/* Dashboard "Right now": four compact boxes in a 2×2 grid; .expanded spans
+   the full width and shows every row. */
+.dash-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:stretch}
+.dash-box .db-body{flex:1}
+@media (max-width:820px){.dash-grid{grid-template-columns:1fr}}
+.dash-box{margin-bottom:0;display:flex;flex-direction:column;position:relative}
+.dash-box .panel-h{padding:12px 16px;gap:8px}
+.dash-box .panel-h h3{font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.db-count{margin-left:auto;font-family:'Roboto Mono',monospace;font-size:12px;font-weight:600;color:var(--steel);white-space:nowrap}
+.db-count:empty{display:none}
+.db-expand{width:28px;height:28px;border-radius:8px;border:0;background:none;color:var(--mist);display:grid;place-items:center;cursor:pointer;flex:none}
+.db-count:empty + .db-expand,.db-count:empty + .btn + .db-expand{margin-left:auto}
+.db-expand:hover{background:var(--paper);color:var(--ink)}
+.db-expand svg{width:15px;height:15px}
+.dash-box.expanded .db-expand svg{transform:rotate(180deg)}
+.db-body{max-height:300px;overflow:hidden;position:relative}
+.dash-box.fades .db-body::after{content:"";position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(to bottom,transparent,var(--white));pointer-events:none}
+.dash-box.expanded{grid-column:1 / -1}
+.dash-box.expanded .db-body{max-height:none}
+.db-more{border:0;border-top:1px solid var(--hair);background:var(--white);padding:9px 16px;font:inherit;font-size:12.5px;font-weight:600;color:var(--brand);cursor:pointer;text-align:center;border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+.db-more:hover{background:var(--paper)}
+.db-sub{padding:8px 16px 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel)}
+.db-sub-late{color:var(--crit)}
+.dash-box .lrow,.dash-box .arow{padding:9px 16px;gap:11px}
+.dash-box .lrow-name{font-size:13.5px}
+.dash-box .lrow-meta{font-size:12px}
+.dash-box .lrow-icon{width:26px;height:26px}
+.dash-box .lrow-icon svg{width:13px;height:13px}
+.dash-box .empty-block{padding:24px 18px}
+
 /* Dashboard: late deliveries panel, and the note under a capped list */
 .panel-late{border-color:#F2C4C4}
 .panel-late .panel-h h3{color:var(--crit)}

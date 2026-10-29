@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=37">
+<link rel="stylesheet" href="css/style.css?v=38">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body class="signed-out">
@@ -46,46 +46,38 @@
 
     <div class="live-divider"><span class="kicker">Right now</span></div>
 
-    <!-- Late deliveries (only shown when there are some) -->
-    <div class="section-gap" id="lateSection" hidden>
-      <div class="panel panel-late">
-        <div class="panel-h"><h3>Late deliveries</h3><span class="code" id="lateCount" style="margin-left:auto;"></span></div>
-        <div id="lateList"></div>
-      </div>
-    </div>
-
-    <!-- Upcoming deliveries -->
-    <div class="section-gap">
-      <div class="panel" id="upcomingCard">
-        <div class="panel-h"><h3 id="upcomingTitle">Deliveries this week</h3></div>
-        <div id="upcomingList"></div>
-      </div>
-    </div>
-
-    <!-- Customer orders -->
-    <div class="section-gap">
-      <div class="panel">
-        <div class="panel-h">
-          <h3>Customer orders</h3>
-          <a href="orders.html" class="btn sm" style="margin-left:auto;">+ New customer order</a>
+    <!-- Right now: four compact boxes; each expands to full width on click. -->
+    <div class="dash-grid">
+      <section class="panel dash-box" id="boxDeliveries">
+        <div class="panel-h"><h3 id="upcomingTitle">Deliveries this week</h3><span class="db-count" id="upcomingCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
+        <div class="db-body">
+          <div id="lateSection" hidden>
+            <div class="db-sub db-sub-late">Late · <span id="lateCount"></span></div>
+            <div id="lateList"></div>
+            <div class="db-sub">Due this week</div>
+          </div>
+          <div id="upcomingList"></div>
         </div>
-        <div id="custOrdersList"></div>
-      </div>
-    </div>
+        <button type="button" class="db-more" data-expand hidden></button>
+      </section>
 
-    <!-- Stock alerts -->
-    <div class="section-gap">
-      <h2 style="font-size:22px; margin-bottom:16px;">Stock alerts</h2>
-      <div class="two-col">
-        <div class="panel" style="margin-bottom:0;">
-          <div class="panel-h"><h3>Short-dated · under 3 weeks</h3><span class="code" id="expiringCount" style="margin-left:auto;"></span></div>
-          <div id="expiringList"></div>
-        </div>
-        <div class="panel" style="margin-bottom:0;">
-          <div class="panel-h"><h3>Low stock</h3><span class="code" id="lowStockCount" style="margin-left:auto;"></span></div>
-          <div id="lowStockList"></div>
-        </div>
-      </div>
+      <section class="panel dash-box" id="boxOrders">
+        <div class="panel-h"><h3>Customer orders</h3><span class="db-count" id="ordersCount"></span><a href="orders.html" class="btn sm" style="margin-left:6px;">+ New</a><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
+        <div class="db-body"><div id="custOrdersList"></div></div>
+        <button type="button" class="db-more" data-expand hidden></button>
+      </section>
+
+      <section class="panel dash-box" id="boxShort">
+        <div class="panel-h"><h3>Short-dated · under 3 weeks</h3><span class="db-count" id="expiringCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
+        <div class="db-body"><div id="expiringList"></div></div>
+        <button type="button" class="db-more" data-expand hidden></button>
+      </section>
+
+      <section class="panel dash-box" id="boxLow">
+        <div class="panel-h"><h3>Low stock</h3><span class="db-count" id="lowStockCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
+        <div class="db-body"><div id="lowStockList"></div></div>
+        <button type="button" class="db-more" data-expand hidden></button>
+      </section>
     </div>
 
   </div>
@@ -257,6 +249,7 @@
       renderUpcomingDeliveries();
       renderCustomerOrders();
       renderStockAlerts();
+      updateDashBoxes();
       setStatus('');
     } catch (err) {
       setStatus('Error loading dashboard: ' + err.message, 'error');
@@ -330,6 +323,7 @@
       .sort((a, b) => a['EXPECTED START DATE'].localeCompare(b['EXPECTED START DATE']));
     const later = open.filter(po => !late.includes(po) && !thisWeek.includes(po)).length;
 
+    document.getElementById('upcomingCount').textContent = `${late.length ? late.length + ' late · ' : ''}${thisWeek.length}`;
     document.getElementById('lateSection').hidden = !late.length;
     document.getElementById('lateCount').textContent = late.length || '';
     document.getElementById('lateList').innerHTML = late.map(po => poRowHtml(po, true)).join('');
@@ -357,6 +351,7 @@
     const open = dash.orders
       .filter(o => o.STATUS !== 'Dispatched')
       .sort((a, b) => (a['DELIVERY DATE'] || '9999').localeCompare(b['DELIVERY DATE'] || '9999'));
+    document.getElementById('ordersCount').textContent = open.length || '';
 
     if (!open.length) {
       list.innerHTML = `
@@ -441,6 +436,34 @@
   document.getElementById('wkPrev').addEventListener('click', () => { weekOffset--; renderWeekBand(); });
   document.getElementById('wkNext').addEventListener('click', () => { weekOffset++; renderWeekBand(); });
   document.getElementById('wkJump').addEventListener('click', (e) => { e.preventDefault(); weekOffset = 0; renderWeekBand(); });
+
+  // ---- the four "Right now" boxes: compact by default, one click to see
+  // everything (the box spans the full width); click again to fold it ----
+  function updateDashBoxes() {
+    document.querySelectorAll('.dash-box').forEach(box => {
+      const body = box.querySelector('.db-body');
+      const more = box.querySelector('.db-more');
+      const expanded = box.classList.contains('expanded');
+      const overflowing = body.scrollHeight > body.clientHeight + 2;
+      const rows = body.querySelectorAll('.lrow, .arow').length;
+      more.hidden = !expanded && !overflowing;
+      more.textContent = expanded ? 'Show less' : `Show all ${rows}`;
+      box.classList.toggle('fades', !expanded && overflowing);
+      box.querySelectorAll('[data-expand].db-expand').forEach(b => {
+        b.hidden = !expanded && !overflowing; // nothing more to show
+        b.title = b.ariaLabel = expanded ? 'Collapse' : 'Expand';
+      });
+    });
+  }
+  document.querySelector('.dash-grid').addEventListener('click', e => {
+    const btn = e.target.closest('[data-expand]');
+    if (!btn) return;
+    const box = btn.closest('.dash-box');
+    box.classList.toggle('expanded');
+    updateDashBoxes();
+    if (box.classList.contains('expanded')) box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+  window.addEventListener('resize', () => { if (dash) updateDashBoxes(); });
 
   const hoverLine = (code, qty, unit) => {
     const prod = dash.productByCode[code];
