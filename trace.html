@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Lot trace</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=43">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <h2>Lot trace</h2>
+  <div id="signedOutNotice" class="note no-print" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="traceCard" style="display:none;">
+    <form class="trace-search no-print" id="searchForm">
+      <input type="search" id="lotInput" list="lotList" placeholder="Lot number" aria-label="Lot number" autocomplete="off">
+      <datalist id="lotList"></datalist>
+      <button type="submit" class="btn sm">Trace</button>
+      <button type="button" class="btn ghost sm" id="printBtn">Print</button>
+    </form>
+    <div id="traceOut"></div>
+    <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=8"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script>
+  // A lot's whole story on one screen, for recalls: where it came from, which
+  // orders it went to (and what each piece weighed), what was wasted, what's
+  // left. Worked out from the tabs each time, nothing stored.
+  let token = null;
+  let data = null;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('traceCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+  function toObjects(rows) {
+    if (!rows.length) return [];
+    const [head, ...rest] = rows;
+    return rest.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+  }
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  const num = v => parseFloat(v) || 0;
+  const round = n => Math.round(n * 1000) / 1000;
+
+  async function loadAll() {
+    if (!requireAuth()) return;
+    const cfg = getStoredConfig();
+    setStatus('Loading...');
+    try {
+      const groupsP = loadProductGroups(cfg.spreadsheetId);
+      const [productRows, deliveryRows, allocRows, lineRows, orderRows, cuts, waste] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
+        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
+        loadOptionalTab(cfg.spreadsheetId, 'Cuts'),
+        loadOptionalTab(cfg.spreadsheetId, 'Waste')
+      ]);
+      const products = toObjects(productRows);
+      registerProducts(products);
+      registerProductGroups(await groupsP);
+      data = {
+        productByCode: Object.fromEntries(products.map(p => [p['Product code'], p])),
+        deliveries: toObjects(deliveryRows),
+        allocs: toObjects(allocRows),
+        lineById: Object.fromEntries(toObjects(lineRows).map(l => [l.ID, l])),
+        orderById: Object.fromEntries(toObjects(orderRows).map(o => [o.ID, o])),
+        cuts: cuts.rows.map(c => c.obj),
+        waste: waste.rows.map(w => w.obj)
+      };
+      document.getElementById('lotList').innerHTML = [...new Set(data.deliveries.map(d => d['BATCH/LOT NUMBER']).filter(Boolean))]
+        .map(l => `<option value="${escapeHtml(l)}"></option>`).join('');
+      const params = new URLSearchParams(location.search);
+      const lot = params.get('lot') || '';
+      document.getElementById('lotInput').value = lot;
+      renderTrace(lot, params.get('code') || '');
+      setStatus('');
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  const nameOf = code => data.productByCode[code]?.['Product name'] || code;
+
+  // One panel per product the lot number was received under: suppliers can
+  // reuse a lot number across products, so stock is keyed on the pair.
+  function renderTrace(lot, code) {
+    const out = document.getElementById('traceOut');
+    if (!lot) { out.innerHTML = '<div class="empty" style="padding:24px;">Type a lot number to see where it came from and which customers it went to.</div>'; return; }
+    const received = data.deliveries.filter(d => d['BATCH/LOT NUMBER'] === lot && (!code || d['PRODUCT CODE'] === code));
+    if (!received.length) { out.innerHTML = `<div class="empty" style="padding:24px;">No delivery found for lot ${escapeHtml(lot)}.</div>`; return; }
+    const codes = [...new Set(received.map(d => d['PRODUCT CODE']))];
+    out.innerHTML = codes.map(c => traceHtml(lot, c, received.filter(d => d['PRODUCT CODE'] === c))).join('');
+  }
+
+  function traceHtml(lot, code, received) {
+    const unit = received[0].UNIT || 'kg';
+    const fmt = n => qtyUnit(round(n), unit);
+    const allocs = data.allocs.filter(a => a['PRODUCT CODE'] === code && a['BATCH/LOT NUMBER'] === lot && !a['PO LINE ID']);
+    const toOrders = allocs.filter(a => a['ORDER LINE ID'] !== 'ADJUSTMENT');
+    const adjustments = allocs.filter(a => a['ORDER LINE ID'] === 'ADJUSTMENT');
+    const waste = data.waste.filter(w => w['PRODUCT CODE'] === code && w['BATCH/LOT NUMBER'] === lot);
+    const wasteAllocIds = new Set(waste.map(w => w['ALLOCATION ID']));
+    const otherAdjustments = adjustments.filter(a => !wasteAllocIds.has(a.ID));
+
+    const totalIn = received.reduce((s, d) => s + num(d['QTY RECEIVED']), 0);
+    const totalOrders = toOrders.reduce((s, a) => s + num(a['QTY ALLOCATED']), 0);
+    const totalWaste = waste.reduce((s, w) => s + num(w.QTY), 0);
+    const totalOther = otherAdjustments.reduce((s, a) => s + num(a['QTY ALLOCATED']), 0);
+
+    const orderRows = toOrders.map(a => {
+      const line = data.lineById[a['ORDER LINE ID']] || {};
+      const order = data.orderById[line['ORDER ID']] || {};
+      const cuts = data.cuts.filter(c => c['ORDER LINE ID'] === line.ID && c['BATCH/LOT NUMBER'] === lot);
+      return { a, line, order, cuts };
+    }).sort((x, y) => (x.order['DELIVERY DATE'] || '').localeCompare(y.order['DELIVERY DATE'] || ''));
+    const customers = new Set(orderRows.map(r => r.order.CUSTOMER).filter(Boolean));
+
+    return `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          ${productCell(data.productByCode[code], `<strong>${escapeHtml(nameOf(code))}</strong><br><span class="code">${escapeHtml(code)} · lot ${escapeHtml(lot)}</span>`)}
+          <span class="muted" style="margin-left:auto; font-size:13px;">Best before ${escapeHtml(fmtDate(received[0]['BEST BEFORE DATE']))}</span>
+        </div>
+        <div class="trace-stats">
+          <div><div class="l">Received</div><div class="n">${escapeHtml(fmt(totalIn))}</div></div>
+          <div><div class="l">To ${customers.size} customer(s)</div><div class="n">${escapeHtml(fmt(totalOrders))}</div></div>
+          <div><div class="l">Waste</div><div class="n">${escapeHtml(fmt(totalWaste))}</div></div>
+          ${otherAdjustments.length ? `<div><div class="l">Other removals</div><div class="n">${escapeHtml(fmt(totalOther))}</div></div>` : ''}
+          <div><div class="l">Left</div><div class="n">${escapeHtml(fmt(totalIn - totalOrders - totalWaste - totalOther))}</div></div>
+        </div>
+        <div style="padding:16px 20px 18px;">
+          <div class="sub-h">Received</div>
+          <div class="scroll" style="overflow-x:auto; margin-bottom:18px;">
+            <table><thead><tr><th>Date</th><th>Supplier</th><th>Purchase order</th><th class="num">Qty</th></tr></thead>
+            <tbody>${received.map(d => `<tr>
+              <td>${escapeHtml(fmtDate(d['DATE RECEIVED']))}</td>
+              <td>${escapeHtml(d.SUPPLIER) || '—'}</td>
+              <td>${d['PO ID'] ? `<a href="purchase-orders.html?open=${encodeURIComponent(d['PO ID'])}">${escapeHtml(d['PO ID'])}</a>` : '—'}</td>
+              <td class="num">${escapeHtml(qtyUnit(num(d['QTY RECEIVED']), d.UNIT || unit))}</td>
+            </tr>`).join('')}</tbody></table>
+          </div>
+          <div class="sub-h">Went to</div>
+          ${orderRows.length ? `<div class="scroll" style="overflow-x:auto; margin-bottom:18px;">
+            <table><thead><tr><th>Customer</th><th>Order</th><th>Delivery</th><th>Status</th><th>Product</th><th class="num">Qty</th><th>Piece weights</th></tr></thead>
+            <tbody>${orderRows.map(r => `<tr>
+              <td>${escapeHtml(r.order.CUSTOMER) || '—'}</td>
+              <td>${r.order.ID ? `<a href="orders.html?open=${encodeURIComponent(r.order.ID)}">${escapeHtml(r.order.ID)}</a>` : '—'}</td>
+              <td>${escapeHtml(fmtDate(r.order['DELIVERY DATE']))}</td>
+              <td>${escapeHtml(r.order.STATUS) || '—'}</td>
+              <td>${escapeHtml(nameOf(r.line['PRODUCT CODE'] || code))}</td>
+              <td class="num">${escapeHtml(fmt(num(r.a['QTY ALLOCATED'])))}</td>
+              <td>${r.cuts.length ? r.cuts.map(c => `${num(c['WEIGHT KG']).toFixed(2)} kg`).join(', ') : '<span class="muted">Not weighed</span>'}</td>
+            </tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="font-size:13px; margin-bottom:18px;">Not allocated to any order.</p>'}
+          ${waste.length ? `<div class="sub-h">Waste</div>
+          <div class="scroll" style="overflow-x:auto; margin-bottom:18px;">
+            <table><thead><tr><th>Date</th><th>Reason</th><th>Recorded by</th><th>Notes</th><th class="num">Qty</th></tr></thead>
+            <tbody>${waste.map(w => `<tr>
+              <td>${escapeHtml(fmtDate(w.DATE))}</td><td>${escapeHtml(w.REASON)}</td><td>${escapeHtml(w['RECORDED BY']) || '—'}</td><td>${escapeHtml(w.NOTES) || '—'}</td>
+              <td class="num">${escapeHtml(qtyUnit(num(w.QTY), w.UNIT || unit))}</td>
+            </tr>`).join('')}</tbody></table></div>` : ''}
+          ${otherAdjustments.length ? `<div class="sub-h">Other removals</div>
+          <div class="scroll" style="overflow-x:auto;">
+            <table><thead><tr><th>Date</th><th>Reason</th><th class="num">Qty</th></tr></thead>
+            <tbody>${otherAdjustments.map(a => `<tr>
+              <td>${escapeHtml(fmtDate(a['ALLOCATED DATE']))}</td><td>${escapeHtml(a.NOTES) || '—'}</td><td class="num">${escapeHtml(fmt(num(a['QTY ALLOCATED'])))}</td>
+            </tr>`).join('')}</tbody></table></div>` : ''}
+        </div>
+      </section>`;
+  }
+
+  document.getElementById('searchForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const lot = document.getElementById('lotInput').value.trim();
+    history.replaceState(null, '', lot ? `?lot=${encodeURIComponent(lot)}` : location.pathname);
+    if (data) renderTrace(lot, '');
+  });
+  document.getElementById('printBtn').addEventListener('click', () => window.print());
+  window.addEventListener('load', loadAll);
+</script>
+</body>
+</html>

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=42">
+<link rel="stylesheet" href="css/style.css?v=43">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -56,7 +56,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=7"></script>
+<script src="js/shell.js?v=8"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/dialog-guard.js?v=1"></script>
@@ -251,7 +251,7 @@
       const rowStyle = b.remaining <= 0.0001 ? 'opacity:0.5;' : '';
       return `<tr style="${rowStyle}">
         <td>${productCell(prod, `<strong>${escapeHtml(b.code)}</strong><br><span class="muted" style="font-size:12px;">${escapeHtml(name)}</span>`)}</td>
-        <td class="code">${escapeHtml(b.batch)}</td>
+        <td class="code"><a href="trace.html?lot=${encodeURIComponent(b.batch)}&code=${encodeURIComponent(b.code)}" title="Trace this lot">${escapeHtml(b.batch)}</a></td>
         <td>${escapeHtml(b.supplier)}</td>
         <td>${escapeHtml(b.received)}</td>
         <td>${bbeTag(b.bbe)}</td>

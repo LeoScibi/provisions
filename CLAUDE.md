@@ -143,6 +143,18 @@ models, sheet schemas, or conventions between the two.
   from. Replacements are never cut products, so the cutting list doesn't
   change. All three are managed entirely from
   `orders.html`'s order-view dialog — see the bullet above.
+- **Cuts** / **Waste** — what actually came off the wheel (`cutting.html`, a
+  phone-first screen; helpers in `js/cuts.js`). Tracked by lot, not by
+  individual wheel. Cuts is one row per piece weighed, including whole wheels
+  sold by the piece; Waste is one row per loss with a reason. Stock maths is
+  unchanged: weighing rewrites the line's Allocations from nominal to actual
+  kilos (`planAllocationChange()`), and waste adds an `ADJUSTMENT` Allocations
+  row. Each save is one all-or-nothing `spreadsheets.batchUpdate`. `lineNeed()`
+  in `orders.html` counts weighed pieces at their actual weight, so a cut
+  under nominal isn't "short". An order moves Allocated/Picked → Cut when its
+  last piece is weighed. Removing a line or order also deletes its Cuts.
+  `trace.html?lot=…` (linked from Stock's By batch table) shows a lot's
+  delivery, customers, piece weights and waste.
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's
   computed on-hand qty into StockTakeLines (`SYSTEM QTY`) with a blank
@@ -168,6 +180,8 @@ purchase-orders.html           Place/receive supplier orders
 stock.html                       Stock view
 stock-take.html                    Physical count vs. system quantity
 orders.html                          Place orders, allocate stock
+cutting.html                         Weigh each cut piece, record waste (phone-first)
+trace.html                           One lot: delivery, customers, weights, waste
 lists.html                             Cutting list, packing slips (truck order, box
                                        counts), delivery notes, box labels
 reports.html                             Sales / purchases for any period against another:

@@ -59,7 +59,8 @@ function computeStockPosition({ deliveries, allocations, orders, orderLines, pur
     // A reservation on stock still arriving: not on the shelf yet.
     if (a['PO LINE ID']) { reservedByPoLine[a['PO LINE ID']] = (reservedByPoLine[a['PO LINE ID']] || 0) + qty; return; }
     const p = get(a['PRODUCT CODE']);
-    if (statusByOrder[orderByLine[a['ORDER LINE ID']]] === 'Dispatched') p.inStock -= qty;
+    // Waste and manual removals (see stock.html) have gone, like a dispatched order.
+    if (a['ORDER LINE ID'] === 'ADJUSTMENT' || statusByOrder[orderByLine[a['ORDER LINE ID']]] === 'Dispatched') p.inStock -= qty;
     else p.allocated += qty;
   });
 

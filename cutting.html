@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Cutting</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=43">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<main>
+  <h2>Cutting</h2>
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="cuttingCard" style="display:none;">
+    <div class="toolbar cut-toolbar">
+      <div class="week-nav">
+        <button type="button" class="btn ghost sm" id="prevWeekBtn" aria-label="Previous week">&larr;</button>
+        <span id="weekLabel" class="week-label"></span>
+        <button type="button" class="btn ghost sm" id="nextWeekBtn" aria-label="Next week">&rarr;</button>
+        <button type="button" class="btn ghost sm" id="thisWeekBtn">This week</button>
+      </div>
+      <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
+      <button type="button" class="btn ghost sm" id="addWasteBtn">+ Waste</button>
+    </div>
+    <div id="cutOut"></div>
+    <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+
+<dialog id="wasteDialog">
+  <form id="wasteForm"></form>
+</dialog>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=8"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/dialog-guard.js?v=1"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script>
+  let token = null;
+  let weekOffset = 0;
+  let data = null;          // everything read from the sheet
+  let tabIds = null;        // tab name -> sheetId, for the batched saves
+  const drafts = {};        // piece key -> weight typed but not saved, kept across re-renders
+  const lotChoice = {};     // piece key -> lot picked instead of the suggested one
+  const confirmed = {};     // piece key -> the odd-looking weight already warned about
+  const openGroups = {};    // wheel code -> whether its panel is open, once someone has toggled it
+
+  const wasteDialog = document.getElementById('wasteDialog');
+  const wasteForm = document.getElementById('wasteForm');
+  const wasteGuard = attachDiscardGuard(wasteDialog, { scope: wasteForm });
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('cuttingCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+  function toObjects(rows) {
+    if (!rows.length) return [];
+    const [head, ...rest] = rows;
+    return rest.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+  }
+  function isoDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  const todayIso = () => isoDate(new Date());
+  const whoIsThis = () => { const u = getStoredUserInfo(); return u.name || u.email || ''; };
+  const fmtKg = n => `${(Math.round(n * 1000) / 1000).toFixed(2)} kg`;
+  function fmtDateShort(iso) {
+    if (!iso) return '';
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  }
+  const daysBetween = (fromIso, toIso) => Math.round((new Date(toIso + 'T00:00:00') - new Date(fromIso + 'T00:00:00')) / 86400000);
+
+  // ---- week: Monday–Sunday, picked by delivery date as on lists.html ----
+
+  function weekRange(offset) {
+    const start = new Date();
+    const day = start.getDay();
+    start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day) + offset * 7);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { start, end, startIso: isoDate(start), endIso: isoDate(end) };
+  }
+  function renderWeekLabel() {
+    const { start, end } = weekRange(weekOffset);
+    const prefix = weekOffset === 0 ? 'This week' : weekOffset === 1 ? 'Next week' : weekOffset === -1 ? 'Last week' : 'Week of';
+    document.getElementById('weekLabel').textContent = `${prefix} · ${fmtDateShort(isoDate(start))}–${fmtDateShort(isoDate(end))}`;
+    document.getElementById('thisWeekBtn').style.display = weekOffset === 0 ? 'none' : '';
+  }
+
+  // ---- loading ----
+
+  async function loadAll() {
+    if (!requireAuth()) return;
+    const cfg = getStoredConfig();
+    renderWeekLabel();
+    setStatus('Loading...');
+    try {
+      const groupsP = loadProductGroups(cfg.spreadsheetId);
+      const [lineRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
+        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token)
+      ]);
+      const products = toObjects(productRows);
+      registerProducts(products);
+      registerProductGroups(await groupsP);
+      const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
+      data = {
+        products,
+        productByCode: Object.fromEntries(products.map(p => [p['Product code'], p])),
+        lines: toObjects(lineRows),
+        deliveries: toObjects(deliveryRows),
+        customerByName: Object.fromEntries(toObjects(customerRows).map(c => [c['Customer name (as in Xero)'], c])),
+        poOfLine: Object.fromEntries(toObjects(polRows).map(l => [l.ID, pos[l['PO ID']] || { ID: l['PO ID'] }]))
+      };
+      await loadMoving(cfg);
+      render();
+      setStatus('');
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  // The tabs a save changes: read again just before writing (someone else
+  // may have changed them, and row numbers move) and after it.
+  async function loadMoving(cfg) {
+    const [orders, allocs, cuts, waste] = await Promise.all([
+      loadOptionalTab(cfg.spreadsheetId, 'Orders'),
+      loadOptionalTab(cfg.spreadsheetId, 'Allocations'),
+      loadOptionalTab(cfg.spreadsheetId, 'Cuts'),
+      loadOptionalTab(cfg.spreadsheetId, 'Waste')
+    ]);
+    if (!orders.exists || !allocs.exists) throw new Error('Could not read Orders and Allocations.');
+    Object.assign(data, {
+      orders: orders.rows, orderHeaders: orders.headers,
+      allocs: allocs.rows, allocHeaders: allocs.headers,
+      cuts: cuts.rows, cutHeaders: cuts.headers, waste: waste.rows, wasteHeaders: waste.headers,
+      tabsReady: cuts.exists && waste.exists
+    });
+  }
+
+  async function sheetId(cfg, title) {
+    if (!tabIds) tabIds = Object.fromEntries((await sheetsGetTabs(cfg.spreadsheetId)).map(t => [t.title, t.sheetId]));
+    if (tabIds[title] === undefined) throw new Error(`${title} tab not found — run Setup first.`);
+    return tabIds[title];
+  }
+
+  // ---- what to cut ----
+
+  // What's left of each lot of a product, on the shelf, earliest best-before first.
+  function lotsOf(code) {
+    const lots = {};
+    data.deliveries.filter(d => d['PRODUCT CODE'] === code).forEach(d => {
+      const b = d['BATCH/LOT NUMBER'];
+      if (!lots[b]) lots[b] = { lot: b, bbe: d['BEST BEFORE DATE'] || '', remaining: 0, unit: d.UNIT || 'kg', test: d.NOTES === 'TEST' };
+      lots[b].remaining += parseFloat(d['QTY RECEIVED']) || 0;
+    });
+    data.allocs.forEach(a => {
+      if (a.obj['PRODUCT CODE'] === code && lots[a.obj['BATCH/LOT NUMBER']] && !a.obj['PO LINE ID']) {
+        lots[a.obj['BATCH/LOT NUMBER']].remaining -= parseFloat(a.obj['QTY ALLOCATED']) || 0;
+      }
+    });
+    return Object.values(lots).sort((a, b) => (a.bbe || '9999').localeCompare(b.bbe || '9999'));
+  }
+
+  function splitPortionName(name) {
+    const i = name.indexOf(' — ');
+    return i < 0 ? { cheese: name, portion: '' } : { cheese: name.slice(0, i), portion: name.slice(i + 3) };
+  }
+
+  // Where each uncut piece of a line should come from: its allocated lots,
+  // earliest best-before first. A piece no lot can cover is waiting on a PO
+  // (`awaiting`) or has nothing allocated.
+  function suggestLots(line, count, nominal, lineCuts, sourceCode) {
+    const lineAllocs = data.allocs.filter(a => a.obj['ORDER LINE ID'] === line.ID);
+    const bbe = Object.fromEntries(lotsOf(sourceCode).map(l => [l.lot, l.bbe]));
+    const held = heldByAllocation(lineAllocs, lineCuts);
+    const shelf = held.filter(e => e.lot).sort((a, b) => (bbe[a.lot] || '9999').localeCompare(bbe[b.lot] || '9999'));
+    const reserved = held.find(e => e.poLineId);
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const fit = shelf.find(e => e.held >= nominal - 0.0001) || (nominal ? null : shelf[0]);
+      if (fit) {
+        fit.held -= nominal;
+        out.push({ lot: fit.lot });
+      } else {
+        out.push({ lot: '', awaiting: reserved ? (data.poOfLine[reserved.poLineId] || {}).ID || 'PO' : '' });
+      }
+    }
+    return out;
+  }
+
+  function buildGroups() {
+    const { startIso, endIso } = weekRange(weekOffset);
+    const orders = data.orders.map(o => o.obj)
+      .filter(o => o.STATUS !== 'Dispatched' && o['DELIVERY DATE'] >= startIso && o['DELIVERY DATE'] <= endIso);
+    const byLine = cutsByLine(data.cuts);
+    const groups = {};
+    const zoneRank = z => z === 'Out of London' ? 0 : z === 'London' ? 1 : 2;
+    orders.forEach(order => {
+      const cust = data.customerByName[order.CUSTOMER] || {};
+      data.lines.filter(l => l['ORDER ID'] === order.ID).forEach(line => {
+        const source = weighSource(line, data.productByCode);
+        if (!source) return;
+        const product = data.productByCode[line['PRODUCT CODE']];
+        const parent = data.productByCode[source.code];
+        const { count, nominal } = linePieces(line, source);
+        const lineCuts = byLine[line.ID] || [];
+        const group = groups[source.code] || (groups[source.code] = {
+          code: source.code,
+          name: splitPortionName((parent || product)['Product name']).cheese,
+          product: parent || product,
+          pieces: []
+        });
+        const portion = source.whole ? 'Whole wheel' : (splitPortionName(product['Product name']).portion || product['Product name']);
+        const suggestions = suggestLots(line, Math.max(0, count - lineCuts.length), nominal, lineCuts, source.code);
+        for (let i = 0; i < count; i++) {
+          const key = `${line.ID}#${i}`;
+          const cut = lineCuts[i] || null;
+          group.pieces.push({
+            key, index: i, count, line, order, product, portion, nominal, whole: source.whole, cut,
+            zone: cust['Delivery zone'] || '',
+            minDays: Math.max(SHORT_DATED_DAYS, parseInt(cust['Min shelf life on receipt (days)'], 10) || 0),
+            suggestion: cut ? null : suggestions[i - lineCuts.length],
+            life: product['Cut shelf life (days)']
+          });
+        }
+      });
+    });
+    return Object.values(groups).sort((a, b) => a.name.localeCompare(b.name)).map(g => {
+      g.pieces.sort((a, b) => zoneRank(a.zone) - zoneRank(b.zone) || a.order.CUSTOMER.localeCompare(b.order.CUSTOMER) || a.key.localeCompare(b.key, undefined, { numeric: true }));
+      return g;
+    });
+  }
+
+  // ---- rendering ----
+
+  function shelfTag(bbe, delivery, minDays) {
+    if (!bbe || !delivery) return '';
+    const days = daysBetween(delivery, bbe);
+    if (days < 0) return `<span class="tag t-crit">Past best-before on delivery</span>`;
+    if (days < minDays) return `<span class="tag t-warn" title="Under the ${minDays}-day minimum on delivery">${days} days left</span>`;
+    return `<span class="muted cp-days">${days} days left</span>`;
+  }
+
+  function lotOfPiece(p) {
+    return lotChoice[p.key] ?? (p.suggestion ? p.suggestion.lot : '');
+  }
+
+  function lotSelect(p, lots) {
+    const current = lotOfPiece(p);
+    const offer = lots.filter(l => l.remaining > 0.0001 || l.lot === current);
+    const blank = p.suggestion?.awaiting ? `Awaiting ${p.suggestion.awaiting} — pick a lot` : 'Not allocated — pick a lot';
+    return `<select class="cp-lot" data-lot="${escapeHtml(p.key)}" aria-label="Lot to cut from">
+      ${current ? '' : `<option value="">${escapeHtml(blank)}</option>`}
+      ${offer.map(l => `<option value="${escapeHtml(l.lot)}"${l.lot === current ? ' selected' : ''}>${escapeHtml(l.lot)}${l.bbe ? ' · BB ' + escapeHtml(fmtDateShort(l.bbe)) : ''}</option>`).join('')}
+    </select>`;
+  }
+
+  function pieceHtml(p, lots) {
+    const label = `${escapeHtml(p.portion)}${p.count > 1 ? ` <span class="muted">${p.index + 1} of ${p.count}</span>` : ''}`;
+    const who = `<div class="cp-who">${escapeHtml(p.order.CUSTOMER)}${p.zone === 'Out of London' ? ' <span class="muted">· Out of London</span>' : ''}</div>`;
+    if (p.cut) {
+      const w = cutWeight(p.cut), diff = p.nominal ? w - p.nominal : 0;
+      return `
+        <div class="cp done">
+          <div class="cp-main">
+            <div class="cp-name">${label}</div>
+            ${who}
+            <div class="cp-meta"><span class="code">${escapeHtml(p.cut.obj['BATCH/LOT NUMBER'])}</span></div>
+          </div>
+          <div class="cp-done">
+            <span class="cp-tick" aria-hidden="true">✓</span>
+            <strong>${escapeHtml(fmtKg(w))}</strong>
+            ${p.nominal ? `<span class="muted">${diff >= 0 ? '+' : '−'}${Math.abs(diff).toFixed(2)}</span>` : ''}
+            <button type="button" class="btn ghost sm" data-undo="${escapeHtml(p.key)}">Undo</button>
+          </div>
+        </div>`;
+    }
+    const lot = lots.find(l => l.lot === lotOfPiece(p));
+    return `
+      <div class="cp" data-piece="${escapeHtml(p.key)}">
+        <div class="cp-main">
+          <div class="cp-name">${label}${p.whole ? ' <span class="tag t-chill">Weigh only</span>' : ''}</div>
+          ${who}
+          <div class="cp-meta">
+            ${p.nominal ? `<span class="muted">about ${escapeHtml(fmtKg(p.nominal))}</span>` : ''}
+            ${p.life ? `<span class="muted">· keeps ${escapeHtml(p.life)} day(s) cut</span>` : ''}
+            ${lot ? shelfTag(lot.bbe, p.order['DELIVERY DATE'], p.minDays) : ''}
+          </div>
+          ${lotSelect(p, lots)}
+        </div>
+        <div class="cp-entry">
+          <div class="cp-input">
+            <input type="text" inputmode="decimal" autocomplete="off" data-weight="${escapeHtml(p.key)}" value="${escapeHtml(drafts[p.key] || '')}" placeholder="0.00" aria-label="Weight in kilos for ${escapeHtml(p.portion)}, ${escapeHtml(p.order.CUSTOMER)}">
+            <span class="cp-unit">kg</span>
+          </div>
+          <button type="button" class="btn cp-save" data-save="${escapeHtml(p.key)}" aria-label="Save weight">Save</button>
+        </div>
+        <div class="cp-warn" data-warn="${escapeHtml(p.key)}" hidden></div>
+      </div>`;
+  }
+
+  function wasteHtml() {
+    const { startIso, endIso } = weekRange(weekOffset);
+    const rows = data.waste.filter(w => w.obj.DATE >= startIso && w.obj.DATE <= endIso).reverse();
+    if (!rows.length) return '';
+    const total = {};
+    rows.forEach(w => { total[w.obj.UNIT] = (total[w.obj.UNIT] || 0) + (parseFloat(w.obj.QTY) || 0); });
+    const nameOf = code => data.productByCode[code]?.['Product name'] || code;
+    return `
+      <section class="panel cut-waste">
+        <div class="panel-h">
+          <h3>Waste this week</h3>
+          <span class="muted" style="margin-left:auto; font-size:13px;">${Object.entries(total).map(([u, n]) => escapeHtml(qtyUnit(Math.round(n * 1000) / 1000, u))).join(' · ')}</span>
+        </div>
+        ${rows.map(w => `
+          <div class="cw-row">
+            <div class="cp-main">
+              <div class="cp-name">${escapeHtml(qtyUnit(parseFloat(w.obj.QTY) || 0, w.obj.UNIT))} · ${escapeHtml(w.obj.REASON)}</div>
+              <div class="cp-who">${escapeHtml(nameOf(w.obj['PRODUCT CODE']))}</div>
+              <div class="cp-meta"><span class="code">${escapeHtml(w.obj['BATCH/LOT NUMBER'])}</span> <span class="muted">· ${escapeHtml(fmtDateShort(w.obj.DATE))}${w.obj.NOTES && w.obj.NOTES !== 'TEST' ? ' · ' + escapeHtml(w.obj.NOTES) : ''}</span></div>
+            </div>
+            <button type="button" class="btn ghost sm" data-undo-waste="${escapeHtml(w.obj.ID)}">Undo</button>
+          </div>`).join('')}
+      </section>`;
+  }
+
+  function render() {
+    // Keep the cursor where it was: saving a piece re-renders the whole list.
+    const focused = document.activeElement?.dataset?.weight;
+    const out = document.getElementById('cutOut');
+    const setupNote = data.tabsReady ? '' : `<div class="note">The Cuts and Waste tabs aren't in the sheet yet — run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> before recording weights.</div>`;
+    const groups = buildGroups();
+    if (!groups.length) {
+      out.innerHTML = setupNote + `<div class="empty" style="padding:24px;">Nothing to cut for delivery this week. Use the arrows to look at another week.</div>` + wasteHtml();
+      return;
+    }
+    const all = groups.flatMap(g => g.pieces);
+    const done = all.filter(p => p.cut);
+    out.innerHTML = `
+      ${setupNote}
+      <div class="cut-progress" role="status">
+        <strong>${done.length} of ${all.length}</strong> pieces weighed
+        <span class="muted">· ${escapeHtml(fmtKg(done.reduce((s, p) => s + cutWeight(p.cut), 0)))} so far</span>
+        <div class="cut-bar"><span style="width:${all.length ? (done.length / all.length) * 100 : 0}%"></span></div>
+      </div>
+      ${groups.map(g => {
+        const left = g.pieces.filter(p => !p.cut).length;
+        const lots = lotsOf(g.code);
+        const firstLot = lots.find(l => g.pieces.some(p => !p.cut && lotOfPiece(p) === l.lot));
+        const open = openGroups[g.code] ?? left > 0;
+        return `
+        <details class="panel cut-group-m" data-group="${escapeHtml(g.code)}"${open ? ' open' : ''}>
+          <summary class="cut-head">
+            ${productThumb(g.product, 'xs')}
+            <span class="cut-title">
+              <strong>${escapeHtml(g.name)}</strong>
+              <span class="muted">${left ? `${left} to weigh` : 'All weighed'}${firstLot ? ` · open <span class="code">${escapeHtml(firstLot.lot)}</span> first` : ''}</span>
+            </span>
+            <button type="button" class="btn ghost sm" data-waste-for="${escapeHtml(g.code)}">Waste</button>
+          </summary>
+          ${g.pieces.map(p => pieceHtml(p, lots)).join('')}
+        </details>`;
+      }).join('')}
+      ${wasteHtml()}`;
+    if (focused) {
+      const el = out.querySelector(`[data-weight="${CSS.escape(focused)}"]`);
+      if (el) el.focus();
+    }
+  }
+
+  function findPiece(key) {
+    return buildGroups().flatMap(g => g.pieces).find(p => p.key === key);
+  }
+
+  function nextPieceInput(afterKey) {
+    const inputs = [...document.querySelectorAll('[data-weight]')];
+    if (!inputs.length) return null;
+    const keys = buildGroups().flatMap(g => g.pieces).map(p => p.key);
+    const from = keys.indexOf(afterKey);
+    return inputs.find(i => keys.indexOf(i.dataset.weight) > from) || inputs[0];
+  }
+
+  // ---- saving a weight ----
+
+  function parseWeight(text) {
+    const n = parseFloat(String(text).replace(',', '.'));
+    return isNaN(n) ? 0 : Math.round(n * 1000) / 1000;
+  }
+
+  function showPieceWarning(key, msg) {
+    const el = document.querySelector(`[data-warn="${CSS.escape(key)}"]`);
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = !msg;
+  }
+
+  async function savePiece(key) {
+    if (!data.tabsReady) { showToast('Run Setup first to add the Cuts and Waste tabs.', 'error'); return; }
+    const p = findPiece(key);
+    if (!p || p.cut) return;
+    const weight = parseWeight(drafts[key]);
+    if (weight <= 0) { showPieceWarning(key, 'Type the weight in kilos.'); return; }
+    const lot = lotOfPiece(p);
+    if (!lot) {
+      showPieceWarning(key, p.suggestion?.awaiting ? `This piece is waiting on ${p.suggestion.awaiting} — pick the lot you're cutting from.` : 'Pick the lot you\'re cutting from.');
+      return;
+    }
+    // A slip like 872 for 0.872 would quietly wreck stock, so an unlikely
+    // weight needs a second tap.
+    if (p.nominal && Math.abs(weight - p.nominal) / p.nominal > 0.25 && confirmed[key] !== weight) {
+      confirmed[key] = weight;
+      showPieceWarning(key, `${fmtKg(weight)} is a long way from the usual ${fmtKg(p.nominal)}. Tap Save again if that's right.`);
+      return;
+    }
+
+    const cfg = getStoredConfig();
+    setStatus('Saving...');
+    try {
+      await loadMoving(cfg);
+      const fresh = findPiece(key);
+      if (!fresh || fresh.cut) {
+        delete drafts[key];
+        render();
+        setStatus('Someone else has just weighed that piece, so nothing was saved.', 'error');
+        return;
+      }
+      const lineAllocs = data.allocs.filter(a => a.obj['ORDER LINE ID'] === p.line.ID);
+      const lineCuts = data.cuts.filter(c => c.obj['ORDER LINE ID'] === p.line.ID);
+      const source = weighSource(p.line, data.productByCode);
+      const lotInfo = lotsOf(source.code).find(l => l.lot === lot);
+      const isTest = p.order.NOTES === 'TEST';
+      const left = lotInfo?.bbe && p.order['DELIVERY DATE'] ? daysBetween(p.order['DELIVERY DATE'], lotInfo.bbe) : null;
+      const note = isTest ? 'TEST' : (left !== null && left < p.minDays ? `Short-dated: ${left} days left on delivery` : '');
+
+      const allocSheet = await sheetId(cfg, 'Allocations');
+      const qtyCol = data.allocHeaders.indexOf('QTY ALLOCATED');
+      let idBase = [['ID'], ...data.allocs.map(a => [a.obj.ID])];
+      const plan = planAllocationChange(lineAllocs, lineCuts, { lot, nominal: p.nominal, weight });
+      const requests = [
+        appendRowsRequest(await sheetId(cfg, 'Cuts'), [[
+          nextId([['ID'], ...data.cuts.map(c => [c.obj.ID])], 'CUT'), todayIso(), p.order.ID, p.line.ID,
+          p.line['PRODUCT CODE'], source.code, lot, p.nominal, weight, whoIsThis(), note
+        ]]),
+        ...allocationChangeRequests(allocSheet, qtyCol, plan, a => {
+          const id = nextId(idBase, 'ALO');
+          idBase = idBase.concat([[id]]);
+          return [id, p.line.ID, source.code, a.lot, a.qty, todayIso(), isTest ? 'TEST' : '', ''];
+        }),
+        ...statusRequests(cfg, p.order.ID, await sheetId(cfg, 'Orders'), { add: p.line.ID })
+      ];
+      await sheetsBatchUpdate(cfg.spreadsheetId, requests);
+      delete drafts[key];
+      delete lotChoice[key];
+      delete confirmed[key];
+      await loadMoving(cfg);
+      render();
+      nextPieceInput(key)?.focus();
+      setStatus('');
+      showToast(`${p.portion} · ${p.order.CUSTOMER}: ${fmtKg(weight)}`);
+    } catch (err) {
+      setStatus('Error saving: ' + err.message, 'error');
+    }
+  }
+
+  // An order moves to Cut when its last piece is weighed, and back when one
+  // is undone. Only from Allocated or Picked: a New order is still short of
+  // stock, and Packed or Dispatched are past this step.
+  function statusRequests(cfg, orderId, ordersSheet, { add, undo }) {
+    const order = data.orders.find(o => o.obj.ID === orderId);
+    const col = data.orderHeaders.indexOf('STATUS');
+    if (!order || col < 0) return [];
+    const status = order.obj.STATUS;
+    if (undo) return status === 'Cut' ? [updateCellRequest(ordersSheet, order.rowNumber, col, 'Allocated')] : [];
+    if (status !== 'Allocated' && status !== 'Picked') return [];
+    const byLine = cutsByLine(data.cuts);
+    const allWeighed = data.lines.filter(l => l['ORDER ID'] === orderId).every(l => {
+      const source = weighSource(l, data.productByCode);
+      if (!source) return true;
+      return (byLine[l.ID] || []).length + (l.ID === add ? 1 : 0) >= linePieces(l, source).count;
+    });
+    return allWeighed ? [updateCellRequest(ordersSheet, order.rowNumber, col, 'Cut')] : [];
+  }
+
+  async function undoPiece(key) {
+    const cfg = getStoredConfig();
+    setStatus('Undoing...');
+    try {
+      await loadMoving(cfg);
+      const p = findPiece(key);
+      if (!p || !p.cut) { render(); setStatus(''); return; }
+      if (!confirm(`Undo ${fmtKg(cutWeight(p.cut))} for ${p.order.CUSTOMER}? The piece goes back to being weighed.`)) { setStatus(''); return; }
+      const lot = p.cut.obj['BATCH/LOT NUMBER'];
+      const source = weighSource(p.line, data.productByCode);
+      const lineAllocs = data.allocs.filter(a => a.obj['ORDER LINE ID'] === p.line.ID);
+      const lineCuts = data.cuts.filter(c => c.obj['ORDER LINE ID'] === p.line.ID);
+      let idBase = [['ID'], ...data.allocs.map(a => [a.obj.ID])];
+      const plan = planAllocationChange(lineAllocs, lineCuts, { lot, nominal: p.nominal, weight: cutWeight(p.cut), undo: true });
+      const requests = [
+        ...allocationChangeRequests(await sheetId(cfg, 'Allocations'), data.allocHeaders.indexOf('QTY ALLOCATED'), plan, a => {
+          const id = nextId(idBase, 'ALO');
+          idBase = idBase.concat([[id]]);
+          return [id, p.line.ID, source.code, a.lot, a.qty, todayIso(), p.order.NOTES === 'TEST' ? 'TEST' : '', ''];
+        }),
+        ...statusRequests(cfg, p.order.ID, await sheetId(cfg, 'Orders'), { undo: true }),
+        ...deleteRowsRequests(await sheetId(cfg, 'Cuts'), [p.cut.rowNumber])
+      ];
+      await sheetsBatchUpdate(cfg.spreadsheetId, requests);
+      await loadMoving(cfg);
+      render();
+      setStatus('');
+    } catch (err) {
+      setStatus('Error undoing: ' + err.message, 'error');
+    }
+  }
+
+  // Whatever the scale eventually sends goes into the box in use, so the
+  // Avery Berkel link only has to call this. Nothing calls it yet.
+  function receiveScaleWeight(kg) {
+    const el = document.activeElement?.dataset?.weight ? document.activeElement : document.querySelector('[data-weight]');
+    if (!el) return;
+    el.value = kg;
+    drafts[el.dataset.weight] = String(kg);
+  }
+
+  // ---- waste ----
+
+  let wasteReason = '';
+
+  function wasteProducts() {
+    return data.products.filter(p => !p['Cut from (code)'] && lotsOf(p['Product code']).some(l => l.remaining > 0.0001))
+      .sort((a, b) => a['Product name'].localeCompare(b['Product name']));
+  }
+
+  function openWaste(code) {
+    wasteReason = '';
+    const options = wasteProducts();
+    wasteForm.innerHTML = `
+      <div class="dlg-h">
+        <div><div class="ttl">Record waste</div></div>
+        <button type="button" class="dlg-close" data-close aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="dlg-b">
+        <div class="field">
+          <label for="w_product">Product *</label>
+          <select id="w_product">
+            <option value="">Select a product…</option>
+            ${options.map(p => `<option value="${escapeHtml(p['Product code'])}"${p['Product code'] === code ? ' selected' : ''}>${escapeHtml(p['Product name'])}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label for="w_lot">Lot *</label>
+          <select id="w_lot"></select>
+        </div>
+        <div class="field">
+          <label for="w_qty">Amount wasted * <span id="w_unit" class="muted"></span></label>
+          <input type="text" inputmode="decimal" autocomplete="off" id="w_qty" placeholder="0.00">
+        </div>
+        <div class="field">
+          <label>Reason *</label>
+          <div class="reason-chips" role="group" aria-label="Reason">
+            ${WASTE_REASONS.map(r => `<button type="button" class="reason-chip" data-reason="${escapeHtml(r)}" aria-pressed="false">${escapeHtml(r)}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label for="w_notes">Notes</label>
+          <input type="text" id="w_notes" autocomplete="off">
+        </div>
+        <div id="wasteStatus" class="mono" style="font-size:12.5px; color:var(--crit);"></div>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn">Save waste</button>
+      </div>`;
+    fillWasteLots();
+    wasteDialog.showModal();
+    wasteGuard.arm();
+  }
+
+  function fillWasteLots() {
+    const code = wasteForm.querySelector('#w_product').value;
+    const lots = code ? lotsOf(code).filter(l => l.remaining > 0.0001) : [];
+    wasteForm.querySelector('#w_lot').innerHTML = lots.length
+      ? lots.map(l => `<option value="${escapeHtml(l.lot)}">${escapeHtml(l.lot)}${l.bbe ? ' · BB ' + escapeHtml(fmtDateShort(l.bbe)) : ''} · ${escapeHtml(qtyUnit(Math.round(l.remaining * 1000) / 1000, l.unit))} free</option>`).join('')
+      : '<option value="">Pick a product first</option>';
+    wasteForm.querySelector('#w_unit').textContent = lots.length ? `(${unitLabel(lots[0].unit)})` : '';
+  }
+
+  async function saveWaste(e) {
+    e.preventDefault();
+    const status = wasteForm.querySelector('#wasteStatus');
+    const code = wasteForm.querySelector('#w_product').value;
+    const lot = wasteForm.querySelector('#w_lot').value;
+    const qty = parseWeight(wasteForm.querySelector('#w_qty').value);
+    const notes = wasteForm.querySelector('#w_notes').value.trim();
+    if (!data.tabsReady) { status.textContent = 'Run Setup first to add the Waste tab.'; return; }
+    if (!code || !lot) { status.textContent = 'Pick the product and lot.'; return; }
+    if (qty <= 0) { status.textContent = 'Type the amount wasted.'; return; }
+    if (!wasteReason) { status.textContent = 'Pick a reason.'; return; }
+    const cfg = getStoredConfig();
+    status.textContent = '';
+    setStatus('Saving...');
+    try {
+      await loadMoving(cfg);
+      const info = lotsOf(code).find(l => l.lot === lot);
+      const wasteId = nextId([['ID'], ...data.waste.map(w => [w.obj.ID])], 'WST');
+      const allocId = nextId([['ID'], ...data.allocs.map(a => [a.obj.ID])], 'ALO');
+      await sheetsBatchUpdate(cfg.spreadsheetId, [
+        appendRowsRequest(await sheetId(cfg, 'Waste'), [[wasteId, todayIso(), code, lot, qty, info?.unit || 'kg', wasteReason, whoIsThis(), info?.test ? 'TEST' : notes, allocId]]),
+        appendRowsRequest(await sheetId(cfg, 'Allocations'), [[allocId, 'ADJUSTMENT', code, lot, qty, todayIso(), info?.test ? 'TEST' : `Waste ${wasteId}: ${wasteReason}`, '']])
+      ]);
+      wasteDialog.close();
+      await loadMoving(cfg);
+      render();
+      setStatus('');
+      showToast(`Waste recorded: ${qtyUnit(qty, info?.unit || 'kg')} · ${wasteReason}`);
+    } catch (err) {
+      setStatus('');
+      status.textContent = 'Error: ' + err.message;
+    }
+  }
+
+  async function undoWaste(id) {
+    const cfg = getStoredConfig();
+    setStatus('Undoing...');
+    try {
+      await loadMoving(cfg);
+      const w = data.waste.find(x => x.obj.ID === id);
+      if (!w) { render(); setStatus(''); return; }
+      if (!confirm(`Undo this waste record? ${qtyUnit(parseFloat(w.obj.QTY) || 0, w.obj.UNIT)} goes back into stock.`)) { setStatus(''); return; }
+      const alloc = data.allocs.find(a => a.obj.ID === w.obj['ALLOCATION ID']);
+      await sheetsBatchUpdate(cfg.spreadsheetId, [
+        ...deleteRowsRequests(await sheetId(cfg, 'Waste'), [w.rowNumber]),
+        ...(alloc ? deleteRowsRequests(await sheetId(cfg, 'Allocations'), [alloc.rowNumber]) : [])
+      ]);
+      await loadMoving(cfg);
+      render();
+      setStatus('');
+    } catch (err) {
+      setStatus('Error undoing: ' + err.message, 'error');
+    }
+  }
+
+  // ---- events ----
+
+  const out = document.getElementById('cutOut');
+  out.addEventListener('input', e => {
+    const key = e.target.dataset.weight;
+    if (!key) return;
+    drafts[key] = e.target.value;
+    delete confirmed[key];
+    showPieceWarning(key, '');
+  });
+  out.addEventListener('change', e => {
+    const key = e.target.dataset.lot;
+    if (!key) return;
+    lotChoice[key] = e.target.value;
+    render();
+  });
+  out.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.dataset.weight) { e.preventDefault(); savePiece(e.target.dataset.weight); }
+  });
+  out.addEventListener('click', e => {
+    const save = e.target.closest('[data-save]');
+    if (save) { savePiece(save.dataset.save); return; }
+    const undo = e.target.closest('[data-undo]');
+    if (undo) { undoPiece(undo.dataset.undo); return; }
+    const undoW = e.target.closest('[data-undo-waste]');
+    if (undoW) { undoWaste(undoW.dataset.undoWaste); return; }
+    const waste = e.target.closest('[data-waste-for]');
+    if (waste) { e.preventDefault(); openWaste(waste.dataset.wasteFor); }
+  });
+  out.addEventListener('toggle', e => {
+    if (e.target.dataset?.group) openGroups[e.target.dataset.group] = e.target.open;
+  }, true);
+
+  wasteForm.addEventListener('change', e => { if (e.target.id === 'w_product') fillWasteLots(); });
+  wasteForm.addEventListener('click', e => {
+    if (e.target.closest('[data-close]')) { wasteGuard.guardedClose(); return; }
+    const chip = e.target.closest('[data-reason]');
+    if (chip) {
+      wasteReason = chip.dataset.reason;
+      wasteForm.querySelectorAll('[data-reason]').forEach(c => c.setAttribute('aria-pressed', String(c === chip)));
+    }
+  });
+  wasteForm.addEventListener('submit', saveWaste);
+
+  function shiftWeek(delta) {
+    weekOffset = delta === 0 ? 0 : weekOffset + delta;
+    renderWeekLabel();
+    if (data) render();
+  }
+  document.getElementById('prevWeekBtn').addEventListener('click', () => shiftWeek(-1));
+  document.getElementById('nextWeekBtn').addEventListener('click', () => shiftWeek(1));
+  document.getElementById('thisWeekBtn').addEventListener('click', () => shiftWeek(0));
+  document.getElementById('reloadBtn').addEventListener('click', loadAll);
+  document.getElementById('addWasteBtn').addEventListener('click', () => { if (data) openWaste(''); });
+  window.addEventListener('load', loadAll);
+</script>
+</body>
+</html>

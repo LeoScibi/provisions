@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=42">
+<link rel="stylesheet" href="css/style.css?v=43">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -38,7 +38,7 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=7"></script>
+<script src="js/shell.js?v=8"></script>
 <script src="js/util.js?v=3"></script>
 <script>
   // Test data generator. Deterministic (seeded), so a preview and the write
@@ -341,7 +341,8 @@
 
   async function readAll(tabs) {
     const cfg = getStoredConfig();
-    const res = await Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`)));
+    // Cuts and Waste don't exist until Setup has been re-run.
+    const res = await Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`).catch(err => { if (TAGGED_LATER.includes(t)) return []; throw err; })));
     return Object.fromEntries(tabs.map((t, i) => [t, res[i]]));
   }
 
@@ -354,11 +355,13 @@
     out.Allocations = notesTagged('Allocations', 'NOTES');
     out.Deliveries = notesTagged('Deliveries', 'NOTES');
     out.PurchaseOrders = notesTagged('PurchaseOrders', 'NOTES');
+    TAGGED_LATER.forEach(t => { if (raw[t]?.length) out[t] = notesTagged(t, 'NOTES'); });
     const testPos = new Set(toObjects(raw.PurchaseOrders).filter(r => r.NOTES === TAG).map(r => r.ID));
     out.PurchaseOrderLines = toObjects(raw.PurchaseOrderLines).filter(r => testPos.has(r['PO ID'])).map(r => r._row);
     return out;
   }
 
+  const TAGGED_LATER = ['Cuts', 'Waste']; // written against test rows on cutting.html, not generated here
   const OP_TABS = ['Orders', 'OrderLines', 'Allocations', 'Deliveries', 'PurchaseOrders', 'PurchaseOrderLines'];
   let generated = null;
 
@@ -426,7 +429,7 @@
     const cfg = getStoredConfig();
     setStatus('Finding test rows…');
     try {
-      const raw = await readAll(OP_TABS);
+      const raw = await readAll([...OP_TABS, ...TAGGED_LATER]);
       const found = testRows(raw);
       const tabs = await sheetsGetTabs(cfg.spreadsheetId);
       const requests = [];

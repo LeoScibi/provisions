@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=42">
+<link rel="stylesheet" href="css/style.css?v=43">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -28,6 +28,7 @@
         <button type="button" class="btn ghost sm" id="nextWeekBtn" aria-label="Next week">&rarr;</button>
         <button type="button" class="btn ghost sm" id="thisWeekBtn">This week</button>
       </div>
+      <a class="btn sm" href="cutting.html">Weigh cuts</a>
       <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
       <button type="button" class="btn ghost sm" id="printCutBtn">Print cutting list</button>
       <button type="button" class="btn ghost sm" id="printPackBtn">Print packing slips</button>
@@ -44,9 +45,10 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=7"></script>
+<script src="js/shell.js?v=8"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
 <script>
   let token = null;
   let weekOffset = 0;
@@ -134,6 +136,7 @@
     setStatus('Loading...');
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
+      const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
       const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
@@ -169,6 +172,7 @@
         lines: toObjects(lineRows),
         allocs: toObjects(allocRows),
         productByCode, deliveryByKey, customerByName,
+        cutsOfLine: cutsByLine((await cutsP).rows),
         // PO line → its PO, for lines held by a reservation on stock still arriving.
         poOfLine: (() => {
           const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
@@ -247,6 +251,7 @@
           portion: portion || prod['Product name'],
           code: prod['Product code'],
           qty, unit: l.UNIT,
+          weighed: sumCutWeight(data.cutsOfLine[l.ID]),
           kg: l.UNIT === 'kg' ? qty : qty * nominal,
           customer: order.CUSTOMER,
           zone: zoneOf(order),
@@ -288,6 +293,7 @@
         name: prod ? prod['Product name'] : l['PRODUCT CODE'],
         qty: ordered, unit: l.UNIT,
         isCut, lots,
+        weighed: sumCutWeight(data.cutsOfLine[l.ID]),
         short: !isCut && allocated + 0.0001 < ordered,
         // Set when the line was swapped for another product (orders.html → Replace).
         replaces: l.REPLACES ? (data.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES) : ''
@@ -341,7 +347,7 @@
                 <tr>
                   <td class="tick-col"><span class="tick-box"></span></td>
                   <td>${productCell(r.product, `<strong>${escapeHtml(r.portion)}</strong><br><span class="code">${escapeHtml(r.code)}</span>`)}</td>
-                  <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}</td>
+                  <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}${r.weighed ? `<br><strong>${r.weighed.toFixed(2)} kg</strong>` : ''}</td>
                   <td>${escapeHtml(r.customer)}</td>
                   <td>${zoneTag(r.zone)}</td>
                   <td class="code">${r.lots.length ? r.lots.map(escapeHtml).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
@@ -425,7 +431,7 @@
             <span class="tick-box"></span>
             ${productThumb(l.product, 'xs')}
             <span class="sl-name" title="${escapeHtml(l.name)}${l.replaces ? ' — replaces ' + escapeHtml(l.replaces) : ''}">${escapeHtml(l.name)}<span class="code">${escapeHtml(l.code)}</span>${l.replaces ? `<span class="sl-replaces">replaces ${escapeHtml(l.replaces)}</span>` : ''}</span>
-            <span class="sl-qty">${escapeHtml(qtyUnit(l.qty, l.unit))}</span>
+            <span class="sl-qty">${escapeHtml(qtyUnit(l.qty, l.unit))}${l.weighed ? ` · <strong>${l.weighed.toFixed(2)} kg</strong>` : ''}</span>
             <span class="sl-from">${fromHtml(l)}</span>
           </div>`).join('') : '<div class="slip-line"><span></span><span></span><span class="muted">No lines on this order.</span></div>'}
       </div>`;
@@ -569,7 +575,7 @@
             <tr>
               <td>${escapeHtml(l.name)}${l.replaces ? `<div class="dn-replaces">Replaces ${escapeHtml(l.replaces)}</div>` : ''}</td>
               <td>${escapeHtml(l.code)}</td>
-              <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}</td>
+              <td class="num">${escapeHtml(qtyUnit(l.qty, l.unit))}${l.weighed ? `<br>${l.weighed.toFixed(2)} kg` : ''}</td>
               <td>${l.isCut ? 'Cut to order' + (l.lots.length ? '<br>' : '') : ''}${l.lots.map(x => x.awaiting ? 'Awaiting delivery' : `${escapeHtml(x.lot)}${x.bbe ? ' · BB ' + escapeHtml(fmtDateShort(x.bbe)) : ''}`).join('<br>')}</td>
             </tr>`).join('')}</tbody></table>
           ${o.NOTES ? `<div class="dn-notes"><span class="dn-k">Notes</span> ${escapeHtml(o.NOTES)}</div>` : ''}

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=42">
+<link rel="stylesheet" href="css/style.css?v=43">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -35,7 +35,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=7"></script>
+<script src="js/shell.js?v=8"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -188,6 +188,18 @@
       // (transport.html), keyed by company name.
       title: 'TransportCompanies',
       headers: ['Company name','Suppliers they bring','Contact name','Phone','Email','Booking / tracking link','Account number','Delivery days','Notes','Active']
+    },
+    {
+      // One row per piece weighed at the bench (cutting.html). WEIGHT KG is
+      // what the invoice goes by; the line's Allocations follow it (js/cuts.js).
+      title: 'Cuts',
+      headers: ['ID','DATE','ORDER ID','ORDER LINE ID','PRODUCT CODE','WHEEL CODE','BATCH/LOT NUMBER','NOMINAL KG','WEIGHT KG','CUT BY','NOTES']
+    },
+    {
+      // Stock lost rather than sold. ALLOCATION ID is the 'ADJUSTMENT' row in
+      // Allocations that takes it off stock, removed with it on undo.
+      title: 'Waste',
+      headers: ['ID','DATE','PRODUCT CODE','BATCH/LOT NUMBER','QTY','UNIT','REASON','RECORDED BY','NOTES','ALLOCATION ID']
     }
   ];
 

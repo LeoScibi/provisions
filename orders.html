@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=42">
+<link rel="stylesheet" href="css/style.css?v=43">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -50,10 +50,11 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=7"></script>
+<script src="js/shell.js?v=8"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/stock-calc.js?v=3"></script>
+<script src="js/stock-calc.js?v=4"></script>
 <script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script>
@@ -65,6 +66,7 @@
   let ordersData = [];      // [{ rowNumber, obj }] from Orders
   let orderLinesData = [];  // [{ rowNumber, obj }] from OrderLines
   let allocationsData = []; // [{ rowNumber, obj }] from Allocations
+  let cutsData = [];        // [{ rowNumber, obj }] from Cuts — pieces already weighed (cutting.html)
   let deliveriesData = [];  // [{ rowNumber, obj }] from Deliveries — source of what's in stock, per lot
   let purchaseOrders = [];  // PurchaseOrders — for what's arriving, shown in the product picker
   let poLines = [];         // PurchaseOrderLines
@@ -170,6 +172,7 @@
     setStatus('Loading...');
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
+      const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
       const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
@@ -191,6 +194,7 @@
       orderLinesData = toRowObjects(lineRows);
       lineHeaders = lineRows[0] || [];
       allocationsData = toRowObjects(allocRows);
+      cutsData = (await cutsP).rows;
       deliveriesData = toRowObjects(deliveryRows);
       renderTable();
       setStatus(`Loaded ${ordersData.length} order(s).`, 'ok');
@@ -1207,7 +1211,13 @@
     return { code, perUnit: 1, unit: null, cut: false };
   }
   const sourceUnit = (src, l) => src.unit || l.UNIT;
-  const lineNeed = l => roundQty((parseFloat(l['QTY ORDERED']) || 0) * stockSource(l['PRODUCT CODE'], l.UNIT).perUnit);
+  // Pieces already weighed need what they actually weighed; the rest, nominal.
+  const cutsForLine = lineId => cutsData.filter(c => c.obj['ORDER LINE ID'] === lineId);
+  const lineNeed = l => {
+    const cuts = cutsForLine(l.ID), perUnit = stockSource(l['PRODUCT CODE'], l.UNIT).perUnit;
+    if (!cuts.length) return roundQty((parseFloat(l['QTY ORDERED']) || 0) * perUnit);
+    return roundQty(Math.max(0, linePieces(l, { perUnit }).count - cuts.length) * perUnit + sumCutWeight(cuts));
+  };
   const allocatedFor = lineId => allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId)
     .reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0);
   const outstandingFor = l => Math.max(0, roundQty(lineNeed(l) - allocatedFor(l.ID)));
@@ -1230,10 +1240,12 @@
     const code = l['PRODUCT CODE'];
     const ordered = parseFloat(l['QTY ORDERED']) || 0;
     const replaced = l.REPLACES ? `<div class="replaced-note">Replaces ${escapeHtml(productName(l.REPLACES))}</div>` : '';
+    const cuts = cutsForLine(l.ID);
+    const weighed = cuts.length ? `<div class="incoming-note">Weighed ${cuts.length} of ${linePieces(l, { perUnit: 0 }).count} · ${escapeHtml(fmtQty(sumCutWeight(cuts), 'kg'))}</div>` : '';
     const src = stockSource(code, l.UNIT);
     const unit = sourceUnit(src, l);
     const fromWheel = src.cut ? `<div class="incoming-note">Cut from ${escapeHtml(src.code)} · ${escapeHtml(fmtQty(lineNeed(l), 'kg'))}</div>` : '';
-    const nameCell = productCell(productOf(code), `${escapeHtml(productName(code))}<br><span class="code">${escapeHtml(code)}</span>${fromWheel}${replaced}`);
+    const nameCell = productCell(productOf(code), `${escapeHtml(productName(code))}<br><span class="code">${escapeHtml(code)}</span>${fromWheel}${weighed}${replaced}`);
     if (src.cut && !src.perUnit) {
       // A portion with no nominal weight can't be turned into wheel kilos.
       return `
@@ -1266,7 +1278,7 @@
         <td>${statusBadge}</td>
         <td class="line-actions">
           <button type="button" class="btn ghost sm" data-open-alloc="${escapeHtml(l.ID)}">${ready ? 'Lots' : 'Allocate'}</button>
-          ${src.cut ? '' : `<button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>`}
+          ${src.cut || cuts.length ? '' : `<button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>`}
           <button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button>
         </td>
       </tr>`;
@@ -1418,6 +1430,7 @@
     const code = src.code;                 // what the stock is drawn from
     l.UNIT = sourceUnit(src, line.obj);    // and in what unit (kg for a wheel)
     const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId);
+    const weighedLots = new Set(cutsForLine(lineId).map(c => c.obj['BATCH/LOT NUMBER']));
     const outstanding = outstandingFor(l);
     const lots = computeAvailableBatches(code);
     const incoming = incomingPool(code, order.obj['DELIVERY DATE']);
@@ -1442,7 +1455,7 @@
             <td class="code">${a.obj['PO LINE ID'] ? `Reserved · ${escapeHtml(poLineInfo(a.obj['PO LINE ID']).poId)}` : escapeHtml(a.obj['BATCH/LOT NUMBER'])}</td>
             <td>${a.obj['PO LINE ID'] ? `<span class="muted">due ${escapeHtml(fmtDateShort(poLineInfo(a.obj['PO LINE ID']).due)) || '?'}</span>` : (escapeHtml(fmtDateShort(deliveryBbeFor(a.obj['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']))) || '—')}</td>
             <td class="num">${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, l.UNIT))}</td>
-            <td class="line-actions"><button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button></td>
+            <td class="line-actions">${weighedLots.has(a.obj['BATCH/LOT NUMBER']) ? '<span class="muted" title="Undo the weight on the Cutting page to change this">Weighed</span>' : `<button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button>`}</td>
           </tr>`).join('')}</tbody></table>` : ''}
         <div class="sub-h">Free stock · earliest best-before first</div>
         ${lots.length ? `
@@ -1468,7 +1481,7 @@
         <div id="allocStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
-        <button type="button" class="btn ghost" data-replace-instead style="margin-right:auto;">Replace instead…</button>
+        ${weighedLots.size ? '' : '<button type="button" class="btn ghost" data-replace-instead style="margin-right:auto;">Replace instead…</button>'}
         <button type="button" class="btn ghost" data-close>Cancel</button>
         ${lots.length || incoming.length ? `<button type="button" class="btn" id="allocSaveBtn">Allocate</button>` : ''}
       </div>`;
@@ -1709,9 +1722,11 @@
     const line = orderLinesData.find(l => l.obj.ID === lineId);
     if (!line) return;
     const lineAllocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId);
-    const msg = lineAllocs.length
-      ? `Remove this line? It has ${lineAllocs.length} stock allocation(s) already made — those will be removed too, freeing the stock back up. This can't be undone.`
-      : `Remove this line? This can't be undone.`;
+    const lineCuts = cutsForLine(lineId);
+    const msg = (lineCuts.length ? `${lineCuts.length} piece(s) on this line are already cut and weighed. Their weights will be deleted and the kilos go back into wheel stock, so waste anything that can't be resold. ` : '')
+      + (lineAllocs.length
+        ? `Remove this line? It has ${lineAllocs.length} stock allocation(s) already made — those will be removed too, freeing the stock back up. This can't be undone.`
+        : `Remove this line? This can't be undone.`);
     if (!confirm(msg)) return;
 
     const cfg = await ensureAuth(setDlgStatus);
@@ -1725,6 +1740,7 @@
         ...buildDeleteRowRequests(linesSid, [line.rowNumber]),
         ...buildDeleteRowRequests(allocsSid, lineAllocs.map(a => a.rowNumber))
       ];
+      if (lineCuts.length) requests.push(...buildDeleteRowRequests(await ensureSheetId(cfg, 'Cuts'), lineCuts.map(c => c.rowNumber)));
       await sheetsBatchUpdate(cfg.spreadsheetId, requests, token);
       await refreshAfterAllocationChange(order.obj.ID);
     } catch (err) {
@@ -1739,7 +1755,9 @@
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID);
     const lineIds = new Set(lines.map(l => l.obj.ID));
     const allocs = allocationsData.filter(a => lineIds.has(a.obj['ORDER LINE ID']));
-    const msg = `Delete order ${order.obj.ID}? This removes its ${lines.length} line(s)`
+    const cuts = cutsData.filter(c => lineIds.has(c.obj['ORDER LINE ID']));
+    const msg = (cuts.length ? `${cuts.length} piece(s) on this order are already cut and weighed. Their weights will be deleted and the kilos go back into wheel stock, so waste anything that can't be resold. ` : '')
+      + `Delete order ${order.obj.ID}? This removes its ${lines.length} line(s)`
       + (allocs.length ? ` and ${allocs.length} stock allocation(s)` : '') + `. This can't be undone.`;
     if (!confirm(msg)) return;
 
@@ -1756,6 +1774,7 @@
         ...buildDeleteRowRequests(linesSid, lines.map(l => l.rowNumber)),
         ...buildDeleteRowRequests(allocsSid, allocs.map(a => a.rowNumber))
       ];
+      if (cuts.length) requests.push(...buildDeleteRowRequests(await ensureSheetId(cfg, 'Cuts'), cuts.map(c => c.rowNumber)));
       await sheetsBatchUpdate(cfg.spreadsheetId, requests, token);
       dialogEl.close();
       setStatus(`Order ${order.obj.ID} deleted.`, 'ok');
