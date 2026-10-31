@@ -123,7 +123,9 @@ models, sheet schemas, or conventions between the two.
   cancelled PO can't cover is released and the order drops back to New. New Order picks a
   delivery *week*; the date saved is the customer's usual day in it
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
-  another day adds "Requested delivery: …" to the notes. In the order dialog each line shows its free stock;
+  another day adds "Requested delivery: …" to the notes. Its button row shows a
+  live total ex VAT (`renderOrderTotal()`): list price, as in Reports, less the
+  customer's Discount (%). In the order dialog each line shows its free stock;
   **Allocate** opens a pop-up of lots (FEFO-prefilled), **Allocate all**
   fills every line FEFO from a shared pool, and **Replace** swaps a line's
   product: the line keeps its original code in OrderLines.`REPLACES` (shown as

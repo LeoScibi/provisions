@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=39">
+<link rel="stylesheet" href="css/style.css?v=40">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -350,6 +350,7 @@
         <div id="orderDlgStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
+        <div class="order-total" aria-live="polite"><span class="ot-l" id="ord_totalLabel">Order total</span><span class="ot-v" id="ord_total">£0.00</span></div>
         <button type="button" class="btn ghost" data-cancel>Cancel</button>
         <button type="submit" class="btn" id="orderSubmitBtn">Place order</button>
       </div>
@@ -369,6 +370,7 @@
     deliveryPick = { week: defaultDeliveryWeek(), day: null };
     renderDeliveryPicker();
     customerSel.addEventListener('change', renderDeliveryPicker);
+    customerSel.addEventListener('change', renderOrderTotal);
 
     searchInput.addEventListener('input', () => renderProductPicker(undefined, undefined, [], undefined, true));
 
@@ -646,6 +648,7 @@
       addBtn.textContent = `Add ${n} item${n === 1 ? '' : 's'} to order`;
     }
     renderDraftList();
+    renderOrderTotal();
     form.querySelectorAll('.pick-card').forEach(card => {
       const line = draftLines.find(l => l.code === card.dataset.pickCode);
       card.classList.toggle('in', !!line);
@@ -654,6 +657,36 @@
     const el = form.querySelector(`#${activeSummaryId}`);
     if (!el) return;
     el.textContent = n ? `${n} item${n === 1 ? '' : 's'}` : '';
+  }
+
+  // ---- New Order: running total, in the button row ----
+  //
+  // List price = landed cost ÷ (1 − GP at list), per kg or per piece by the
+  // product's pricing basis — the same figure Reports uses — less the
+  // customer's Discount (%). Shop and Selfridges prices live in Xero, so for
+  // those this is an estimate until Xero is connected.
+  function listPrice(p) {
+    const landed = parseFloat(p['Landed cost £']) || parseFloat(p['Cost price £']) || 0;
+    const gp = parseFloat(p['GP at list']);
+    return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
+  }
+  function lineValue(l) {
+    const p = productOf(l.code);
+    if (!p) return 0;
+    const billable = p['Pricing basis'] === 'Per kg' && l.unit !== 'kg' ? l.qty * (parseFloat(p['Nominal weight (kg)']) || 0) : l.qty;
+    return billable * listPrice(p);
+  }
+  function renderOrderTotal() {
+    const totalEl = form.querySelector('#ord_total');
+    if (!totalEl) return;
+    const lines = expandDraftLines();
+    const values = lines.map(lineValue);
+    const c = customers.find(x => x['Customer name (as in Xero)'] === form.querySelector('#ord_customer')?.value);
+    const discount = parseFloat(c?.['Discount (%)']) || 0;
+    const total = values.reduce((s, v) => s + v, 0) * (1 - discount / 100);
+    const unpriced = values.filter(v => !v).length;
+    totalEl.textContent = `£${total.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', discount ? `after ${discount}% discount` : '', unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
   }
 
   // ---- New Order: compact search cards (right) and the order list (left) ----
