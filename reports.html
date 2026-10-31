@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=41">
+<link rel="stylesheet" href="css/style.css?v=42">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -23,13 +23,48 @@
     <div class="rp-filters">
       <div class="seg" role="tablist" aria-label="Report">
         <button type="button" class="seg-btn" data-view="customers">Customers</button>
-        <button type="button" class="seg-btn" data-view="suppliers">Suppliers</button>
         <button type="button" class="seg-btn" data-view="products">Products</button>
+        <button type="button" class="seg-btn" data-view="suppliers">Suppliers</button>
       </div>
       <div class="seg" role="tablist" aria-label="Measure" id="measureSeg"></div>
-      <div class="seg" role="tablist" aria-label="Period">
+      <div class="seg" role="tablist" aria-label="Chart points">
         <button type="button" class="seg-btn" data-bucket="week">Weekly</button>
         <button type="button" class="seg-btn" data-bucket="month">Monthly</button>
+      </div>
+    </div>
+    <div class="rp-periods">
+      <div class="field">
+        <label for="rpPreset">Period</label>
+        <select id="rpPreset">
+          <option value="w4">Last 4 weeks</option>
+          <option value="w13">Last 13 weeks</option>
+          <option value="w26">Last 26 weeks</option>
+          <option value="thisMonth">This month</option>
+          <option value="lastMonth">Last month</option>
+          <option value="ytd">This year so far</option>
+          <option value="custom">Custom dates…</option>
+        </select>
+      </div>
+      <div class="rp-dates" id="rpCustomA" hidden>
+        <div class="field"><label for="rpAFrom">From</label><input type="date" id="rpAFrom"></div>
+        <div class="field"><label for="rpATo">To</label><input type="date" id="rpATo"></div>
+      </div>
+      <div class="field">
+        <label for="rpCompare">Compare with</label>
+        <select id="rpCompare">
+          <option value="prev">Previous period</option>
+          <option value="year">Same period last year</option>
+          <option value="custom">Custom dates…</option>
+          <option value="none">Nothing</option>
+        </select>
+      </div>
+      <div class="rp-dates" id="rpCustomB" hidden>
+        <div class="field"><label for="rpBFrom">From</label><input type="date" id="rpBFrom"></div>
+        <div class="field"><label for="rpBTo">To</label><input type="date" id="rpBTo"></div>
+      </div>
+      <div class="field">
+        <label for="rpCategory">Category</label>
+        <select id="rpCategory"></select>
       </div>
     </div>
 
@@ -42,7 +77,10 @@
         <div class="rp-stats" id="rpStats"></div>
       </div>
       <div class="rp-body">
-        <div class="rp-chart" id="rpChart"></div>
+        <div>
+          <div class="rp-legend" id="rpLegend"></div>
+          <div class="rp-chart" id="rpChart"></div>
+        </div>
         <div class="rp-side" id="rpSide"></div>
       </div>
     </div>
@@ -51,18 +89,11 @@
       <div class="panel-h">
         <h3 id="rpTableTitle"></h3>
         <input type="search" id="rpSearch" placeholder="Search…" style="margin-left:auto; width:220px;">
+        <button type="button" class="btn ghost sm" id="rpCsv">Download CSV</button>
       </div>
       <div class="scroll" style="overflow-x:auto;">
         <table class="rp-table">
-          <thead><tr>
-            <th data-sort="name">Name</th>
-            <th>Last 6 months</th>
-            <th class="num" data-sort="total" id="rpTotalHead">Total</th>
-            <th class="num" data-sort="share">Share</th>
-            <th class="num" data-sort="count" id="rpCountHead">Orders</th>
-            <th class="num" data-sort="trend" title="Last 13 weeks against the 13 before">Trend</th>
-            <th data-sort="last">Last</th>
-          </tr></thead>
+          <thead><tr id="rpHeadRow"></tr></thead>
           <tbody id="rpRows"></tbody>
         </table>
       </div>
@@ -74,23 +105,33 @@
 <script src="js/sheets.js?v=6"></script>
 <script src="js/shell.js?v=7"></script>
 <script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
 <script>
-  // Sales and purchase trends over the last 26 weeks. Nothing new is
+  // Sales and purchases for any period, against any other. Nothing new is
   // stored: sales come from Orders + OrderLines (by delivery date, valued at
   // list price = landed cost ÷ (1 − GP at list)), purchases from
   // PurchaseOrders + PurchaseOrderLines (by order date, at cost price),
   // excluding cancelled POs. Weight counts kg lines, and pieces of products
   // with a nominal weight.
+  //
+  // Drill-down is `state.path`, the steps taken down a view's CHAIN: Customers
+  // → a customer's products → that product's deliveries; Products → a
+  // product's customers → that customer's deliveries; Suppliers likewise.
 
-  const WEEKS = 26;
   const VIEW_KEY = 'provisions_reportView';
   const MEASURES = {
     sales: [['value', 'Sales £'], ['kg', 'Weight kg'], ['count', 'Orders']],
     purchases: [['value', 'Purchases £'], ['kg', 'Weight kg'], ['count', 'POs']]
   };
-  const state = { view: 'customers', measure: 'value', bucket: 'week', focus: null, sort: 'total', dir: -1, term: '' };
-  try { Object.assign(state, JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'), { focus: null, term: '' }); } catch (e) {}
-  let data = null; // { sales: [...], purchases: [...], buckets }
+  const CHAIN = { customers: ['customer', 'product'], suppliers: ['supplier', 'product'], products: ['product', 'customer'] };
+  const DIM_LABEL = { customer: 'Customers', supplier: 'Suppliers', product: 'Products' };
+  const LENSES = [['best', 'Best'], ['worst', 'Worst'], ['rising', 'Rising'], ['falling', 'Falling'], ['notsold', 'Zero']];
+  const SORTS = ['name', 'a', 'b', 'diff', 'pct', 'share', 'count', 'last'];
+  const state = { view: 'customers', measure: 'value', bucket: 'week', preset: 'w13', compare: 'prev', customA: {}, customB: {}, category: '', lens: 'best', path: [], sort: 'a', dir: -1, term: '' };
+  try { Object.assign(state, JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'), { path: [], term: '', category: '', lens: 'best' }); } catch (e) {}
+  if (!SORTS.includes(state.sort)) { state.sort = 'a'; state.dir = -1; }
+  let data = null; // { sales: [...], purchases: [...], activeProducts: [...] }
+  let exportRows = [];
 
   function setStatus(msg, kind) {
     const el = document.getElementById('status');
@@ -105,26 +146,69 @@
   }
   const toObjects = ([head = [], ...rows]) => rows.map(r => Object.fromEntries(head.map((h, j) => [h, r[j] ?? ''])));
 
-  // ---- dates and buckets ----
+  // ---- dates and periods ----
   const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  function mondayOf(d) { const x = new Date(d); const day = x.getDay(); x.setDate(x.getDate() + (day === 0 ? -6 : 1 - day)); x.setHours(0, 0, 0, 0); return x; }
-  function buildBuckets() {
-    const thisMonday = mondayOf(new Date());
-    const weeks = [];
-    for (let i = WEEKS - 1; i >= 0; i--) {
-      const start = new Date(thisMonday); start.setDate(start.getDate() - 7 * i);
-      weeks.push({ key: iso(start), label: start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), start });
-    }
-    const months = [];
-    const m0 = new Date(thisMonday.getFullYear(), thisMonday.getMonth() - 5, 1);
-    for (let i = 0; i < 6; i++) {
-      const d = new Date(m0.getFullYear(), m0.getMonth() + i, 1);
-      months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleDateString('en-GB', { month: 'short' }), start: d });
-    }
-    return { week: weeks, month: months, from: iso(weeks[0].start < months[0].start ? weeks[0].start : months[0].start) };
+  const parse = s => new Date(s + 'T00:00:00');
+  const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+  const daysBetween = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
+  const monthEnd = (y, m) => new Date(y, m + 1, 0).getDate();
+  const isMonthEnd = s => { const d = parse(s); return d.getDate() === monthEnd(d.getFullYear(), d.getMonth()); };
+  // Same day n months away, or the month's last day if `s` is one of those or
+  // the target month is too short.
+  function shiftMonths(s, n) {
+    const d = parse(s), first = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    const last = monthEnd(first.getFullYear(), first.getMonth());
+    first.setDate(isMonthEnd(s) ? last : Math.min(d.getDate(), last));
+    return iso(first);
   }
-  const weekKey = dateStr => iso(mondayOf(new Date(dateStr + 'T00:00:00')));
-  const monthKey = dateStr => dateStr.slice(0, 7);
+  const fmtDay = (s, year) => parse(s).toLocaleDateString('en-GB', year ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' });
+  const fmtRange = p => `${fmtDay(p.from, parse(p.from).getFullYear() !== parse(p.to).getFullYear())} – ${fmtDay(p.to, true)}`;
+
+  function periods() {
+    const today = iso(new Date()), t = parse(today);
+    const lastDays = n => ({ from: addDays(today, 1 - n), to: today });
+    const validCustom = c => c.from && c.to ? (c.from <= c.to ? { from: c.from, to: c.to } : { from: c.to, to: c.from }) : null;
+    const presets = {
+      w4: lastDays(28), w13: lastDays(91), w26: lastDays(182),
+      thisMonth: { from: iso(new Date(t.getFullYear(), t.getMonth(), 1)), to: today },
+      lastMonth: { from: iso(new Date(t.getFullYear(), t.getMonth() - 1, 1)), to: iso(new Date(t.getFullYear(), t.getMonth(), 0)) },
+      ytd: { from: iso(new Date(t.getFullYear(), 0, 1)), to: today },
+      custom: validCustom(state.customA) || lastDays(91)
+    };
+    const a = presets[state.preset] || presets.w13;
+    const shifted = n => ({ from: shiftMonths(a.from, n), to: shiftMonths(a.to, n) });
+    let b = null;
+    if (state.compare === 'prev') {
+      if (state.preset === 'thisMonth' || state.preset === 'lastMonth') b = shifted(-1);
+      else if (state.preset === 'ytd') b = shifted(-12);
+      else { const to = addDays(a.from, -1); b = { from: addDays(to, -daysBetween(a.from, a.to)), to }; }
+    } else if (state.compare === 'year') b = shifted(-12);
+    else if (state.compare === 'custom') b = validCustom(state.customB);
+    return { a, b };
+  }
+  const inPeriod = (r, p) => !!p && r.date >= p.from && r.date <= p.to;
+
+  // A period's chart points, each counted from its own start so two periods
+  // line up: runs of 7 days, or calendar months.
+  function bucketsOf(p) {
+    const out = [];
+    if (state.bucket === 'week') {
+      for (let s = p.from; s <= p.to; s = addDays(s, 7)) out.push({ from: s, label: fmtDay(s), tip: `Week of ${fmtDay(s)}` });
+      return out;
+    }
+    const start = parse(p.from);
+    for (let i = 0; ; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+      if (iso(d) > p.to) return out;
+      const label = d.toLocaleDateString('en-GB', { month: 'short' });
+      out.push({ from: iso(d), label, tip: d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) });
+    }
+  }
+  function bucketIndex(date, p) {
+    if (state.bucket === 'week') return Math.floor(daysBetween(p.from, date) / 7);
+    const a = parse(p.from), d = parse(date);
+    return (d.getFullYear() - a.getFullYear()) * 12 + d.getMonth() - a.getMonth();
+  }
 
   // ---- values ----
   function listPrice(p) {
@@ -148,61 +232,60 @@
     setStatus('Loading…');
     try {
       const tabs = ['Orders', 'OrderLines', 'Products', 'PurchaseOrders', 'PurchaseOrderLines'];
-      const [rows, groupRows] = await Promise.all([
+      const [rows, groups] = await Promise.all([
         Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`))),
-        sheetsGet(cfg.spreadsheetId, 'ProductGroups!A:Z').catch(() => [])
+        loadProductGroups(cfg.spreadsheetId)
       ]);
       const [orders, lines, products, pos, poLines] = rows.map(toObjects);
-      const groups = toObjects(groupRows);
+      registerProducts(products);
+      registerProductGroups(groups);
       const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
       const groupName = Object.fromEntries(groups.map(g => [g.ID, g['Product name']]));
       const productName = p => groupName[p['Group ID']] || (p['Product name'] || '').split(' — ')[0];
-      const buckets = buildBuckets();
+      const record = (p, l, m, extra) => ({ product: productName(p), item: p['Product name'], code: p['Product code'], category: p.Category || 'Uncategorised', unit: l.UNIT, ...m, ...extra });
 
       const orderById = Object.fromEntries(orders.map(o => [o.ID, o]));
       const sales = [];
       lines.forEach(l => {
         const o = orderById[l['ORDER ID']], p = byCode[l['PRODUCT CODE']];
-        if (!o || !p) return;
-        const date = o['DELIVERY DATE'] || o.DATE;
-        if (!date || date < buckets.from) return;
+        const date = o && (o['DELIVERY DATE'] || o.DATE);
+        if (!date || !p) return;
         const qty = parseFloat(l['QTY ORDERED']) || 0;
-        const m = lineMeasures(p, qty, l.UNIT, listPrice(p));
-        sales.push({ date, customer: o.CUSTOMER, supplier: p['Default supplier'], product: productName(p), item: p['Product name'], code: p['Product code'], order: o.ID, qty, unit: l.UNIT, ...m });
+        sales.push(record(p, l, lineMeasures(p, qty, l.UNIT, listPrice(p)), { date, customer: o.CUSTOMER, supplier: p['Default supplier'], order: o.ID, qty }));
       });
 
       const poById = Object.fromEntries(pos.map(o => [o.ID, o]));
       const purchases = [];
       poLines.forEach(l => {
         const po = poById[l['PO ID']], p = byCode[l['PRODUCT CODE']];
-        if (!po || !p || po.STATUS === 'Cancelled') return;
-        const date = po['ORDER DATE'];
-        if (!date || date < buckets.from) return;
+        if (!po || !p || po.STATUS === 'Cancelled' || !po['ORDER DATE']) return;
         const qty = parseFloat(l['QTY RECEIVED']) || parseFloat(l['QTY ORDERED']) || 0;
-        const m = lineMeasures(p, qty, l.UNIT, parseFloat(p['Cost price £']) || 0);
-        purchases.push({ date, supplier: po.SUPPLIER, product: productName(p), item: p['Product name'], code: p['Product code'], order: po.ID, qty, unit: l.UNIT, ...m });
+        purchases.push(record(p, l, lineMeasures(p, qty, l.UNIT, parseFloat(p['Cost price £']) || 0), { date: po['ORDER DATE'], supplier: po.SUPPLIER, order: po.ID, qty }));
       });
 
-      data = { sales, purchases, buckets };
+      const active = products.filter(p => p.Active !== 'No' && p.Sellable !== 'No');
+      const thumbFor = {};
+      products.forEach(p => { thumbFor[productName(p)] = thumbFor[productName(p)] || p; });
+      data = { sales, purchases, thumbFor, activeProducts: active.map(p => ({ name: productName(p), category: p.Category || 'Uncategorised' })) };
+      const cats = [...new Set(products.map(p => p.Category || 'Uncategorised'))].sort();
+      document.getElementById('rpCategory').innerHTML = `<option value="">All categories</option>${cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}`;
       render();
-      setStatus(`${new Set(sales.map(s => s.order)).size} orders and ${new Set(purchases.map(s => s.order)).size} POs since ${buckets.from}.`);
     } catch (err) {
       setStatus('Error loading: ' + err.message, 'error');
     }
   }
 
   // ---- aggregation ----
-  const source = () => state.view === 'suppliers' ? data.purchases : data.sales;
-  const entityOf = r => state.view === 'customers' ? r.customer : state.view === 'suppliers' ? r.supplier : r.product;
+  const kindOf = () => state.view === 'suppliers' ? 'purchases' : 'sales';
+  const currentDim = () => CHAIN[state.view][state.path.length] || null; // null: the deliveries themselves
+  const scoped = () => data[kindOf()].filter(r => (!state.category || r.category === state.category) && state.path.every(s => r[s.dim] === s.value));
 
-  function series(recs) {
-    const list = data.buckets[state.bucket];
-    const keyOf = state.bucket === 'week' ? weekKey : monthKey;
-    const idx = Object.fromEntries(list.map((b, i) => [b.key, i]));
-    const vals = list.map(() => 0), orderSets = list.map(() => new Set());
+  function series(recs, p) {
+    const n = bucketsOf(p).length;
+    const vals = Array(n).fill(0), orderSets = Array.from({ length: n }, () => new Set());
     recs.forEach(r => {
-      const i = idx[keyOf(r.date)];
-      if (i === undefined) return;
+      const i = bucketIndex(r.date, p);
+      if (i < 0 || i >= n) return;
       if (state.measure === 'count') orderSets[i].add(r.order); else vals[i] += r[state.measure];
     });
     return state.measure === 'count' ? orderSets.map(s => s.size) : vals;
@@ -210,12 +293,43 @@
   function total(recs) {
     return state.measure === 'count' ? new Set(recs.map(r => r.order)).size : recs.reduce((s, r) => s + r[state.measure], 0);
   }
-  // Last 13 weeks against the 13 before (weekly buckets, whatever's shown).
-  function trend(recs) {
-    const weeks = data.buckets.week, cut = weeks[13].key;
-    const a = recs.filter(r => weekKey(r.date) < cut), b = recs.filter(r => weekKey(r.date) >= cut);
-    const ta = total(a), tb = total(b);
-    return ta ? (tb - ta) / ta : (tb ? null : 0);
+  const change = (a, b) => b ? (a - b) / b : (a ? null : 0); // null: nothing to compare with
+
+  // Every name at this level with anything to say: sold in either period, or
+  // ever (so it can show as not sold), plus, at the top of Products, active
+  // products that have never sold at all.
+  function buildRows(all, dim, a, b) {
+    const groups = new Map();
+    const row = name => groups.get(name) || groups.set(name, { name, recsA: [], recsB: [], last: '', ever: false }).get(name);
+    all.forEach(r => {
+      if (!r[dim]) return;
+      const x = row(r[dim]);
+      x.ever = true;
+      if (r.date > x.last && r.date <= a.to) x.last = r.date;
+      if (inPeriod(r, a)) x.recsA.push(r);
+      if (inPeriod(r, b)) x.recsB.push(r);
+    });
+    if (dim === 'product' && !state.path.length && kindOf() === 'sales') {
+      data.activeProducts.filter(p => !state.category || p.category === state.category).forEach(p => row(p.name));
+    }
+    const rows = [...groups.values()];
+    rows.forEach(x => {
+      x.a = total(x.recsA); x.b = total(x.recsB); x.diff = x.a - x.b; x.pct = change(x.a, x.b);
+      x.count = new Set(x.recsA.map(r => r.order)).size;
+    });
+    const grand = rows.reduce((s, x) => s + (state.measure === 'count' ? x.count : x.a), 0) || 1;
+    rows.forEach(x => { x.share = (state.measure === 'count' ? x.count : x.a) / grand; });
+    return rows;
+  }
+
+  function lensList(rows, lens) {
+    const sold = rows.filter(x => x.a > 0);
+    if (lens === 'best') return [...sold].sort((p, q) => q.a - p.a);
+    if (lens === 'worst') return [...sold].sort((p, q) => p.a - q.a);
+    if (lens === 'rising') return rows.filter(x => x.diff > 0).sort((p, q) => q.diff - p.diff);
+    if (lens === 'falling') return rows.filter(x => x.diff < 0).sort((p, q) => p.diff - q.diff);
+    // Not sold: what sold in the comparison period first, biggest loss first.
+    return rows.filter(x => !x.a).sort((p, q) => q.b - p.b || q.last.localeCompare(p.last) || p.name.localeCompare(q.name));
   }
 
   // ---- formatting ----
@@ -224,51 +338,60 @@
     if (measure === 'kg') return v >= 1000 ? `${(v / 1000).toFixed(1)}t` : `${v.toFixed(v < 100 ? 1 : 0)}kg`;
     return v >= 10000 ? `£${(v / 1000).toFixed(1)}k` : `£${Math.round(v).toLocaleString('en-GB')}`;
   }
-  const fmtTrend = t => t === null ? 'new' : `${t > 0 ? '+' : ''}${Math.round(t * 100)}%`;
-  const trendClass = t => t === null ? 'up' : t > 0.05 ? 'up' : t < -0.05 ? 'down' : '';
+  const fmtDiff = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v))}`;
+  const fmtPct = t => t === null ? 'new' : `${t > 0 ? '+' : t < 0 ? '−' : ''}${Math.abs(Math.round(t * 100))}%`;
+  const trendClass = t => t === null || t > 0.05 ? 'up' : t < -0.05 ? 'down' : '';
 
-  // ---- the chart: one series, crosshair + tooltip ----
-  function lineChart(el, values, labels) {
+  // ---- the chart: this period, and the comparison behind it ----
+  function lineChart(el, valuesA, valuesB, bucketsA, bucketsB) {
     const W = 760, H = 260, L = 56, R = 16, T = 16, B = 28;
-    const max = Math.max(1, ...values) * 1.1;
+    const n = Math.max(valuesA.length, valuesB.length, 1);
+    const max = Math.max(1, ...valuesA, ...valuesB) * 1.1;
     const step = niceStep(max / 4);
     const top = Math.ceil(max / step) * step;
-    const x = i => L + (values.length === 1 ? 0 : i * (W - L - R) / (values.length - 1));
+    const x = i => L + (n === 1 ? (W - L - R) / 2 : i * (W - L - R) / (n - 1));
     const y = v => T + (H - T - B) * (1 - v / top);
     const ticks = []; for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
-    const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-    const labelEvery = Math.ceil(values.length / 8);
+    const pts = vals => vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const labelOf = i => (bucketsA[i] || bucketsB[i]).label;
+    const labelEvery = Math.ceil(n / 8);
+    const dots = n <= 4;
     el.innerHTML = `
       <svg viewBox="0 0 ${W} ${H}" class="rp-svg" role="img" aria-label="${escapeHtml(document.getElementById('rpTitle').textContent)}">
         ${ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="rp-grid"/><text x="${L - 8}" y="${y(v) + 4}" class="rp-axis" text-anchor="end">${escapeHtml(fmt(v))}</text>`).join('')}
-        ${labels.map((lb, i) => {
+        ${Array.from({ length: n }, (_, i) => {
           // Every Nth label, plus the last one unless it would crowd the one before.
-          const last = i === labels.length - 1;
+          const last = i === n - 1;
           const show = i % labelEvery === 0 || (last && i % labelEvery >= labelEvery / 2);
-          return show ? `<text x="${x(i)}" y="${H - 8}" class="rp-axis" text-anchor="${last ? 'end' : 'middle'}">${escapeHtml(lb)}</text>` : '';
+          return show ? `<text x="${x(i)}" y="${H - 8}" class="rp-axis" text-anchor="${last && n > 1 ? 'end' : 'middle'}">${escapeHtml(labelOf(i))}</text>` : '';
         }).join('')}
-        <polygon points="${L},${y(0)} ${pts.join(' ')} ${x(values.length - 1)},${y(0)}" class="rp-area"/>
-        <polyline points="${pts.join(' ')}" class="rp-line"/>
+        ${valuesB.length ? `<polyline points="${pts(valuesB)}" class="rp-line-b"/>` : ''}
+        <polygon points="${x(0)},${y(0)} ${pts(valuesA)} ${x(valuesA.length - 1)},${y(0)}" class="rp-area"/>
+        <polyline points="${pts(valuesA)}" class="rp-line"/>
+        ${dots ? valuesB.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="4" class="rp-dot-b"/>`).join('') + valuesA.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="4" class="rp-dot"/>`).join('') : ''}
         <line class="rp-cross" y1="${T}" y2="${H - B}" x1="0" x2="0" style="display:none"/>
-        <circle class="rp-dot" r="5" style="display:none"/>
+        <circle class="rp-dot" r="5" data-hover style="display:none"/>
         <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" class="rp-hit"/>
       </svg>
       <div class="rp-tip" style="display:none"></div>`;
     const svg = el.querySelector('svg'), tip = el.querySelector('.rp-tip');
-    const cross = el.querySelector('.rp-cross'), dot = el.querySelector('.rp-dot');
-    svg.querySelector('.rp-hit').addEventListener('mousemove', e => {
+    const cross = el.querySelector('.rp-cross'), dot = el.querySelector('[data-hover]');
+    const hit = svg.querySelector('.rp-hit');
+    hit.addEventListener('mousemove', e => {
       const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
       const sx = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
-      const i = Math.max(0, Math.min(values.length - 1, Math.round((sx - L) / ((W - L - R) / Math.max(1, values.length - 1)))));
+      const i = Math.max(0, Math.min(n - 1, Math.round((sx - L) / ((W - L - R) / Math.max(1, n - 1)))));
+      const a = valuesA[i], b = valuesB[i];
       cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.style.display = '';
-      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(values[i])); dot.style.display = '';
-      tip.innerHTML = `<div class="rp-tip-k">${state.bucket === 'week' ? 'Week of ' : ''}${escapeHtml(labels[i])}</div><div class="rp-tip-v">${escapeHtml(fmt(values[i]))}</div>`;
+      if (a !== undefined) { dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(a)); dot.style.display = ''; } else dot.style.display = 'none';
+      tip.innerHTML = `${a !== undefined ? `<div class="rp-tip-k">${escapeHtml(bucketsA[i].tip)}</div><div class="rp-tip-v">${escapeHtml(fmt(a))}</div>` : ''}
+        ${b !== undefined ? `<div class="rp-tip-k">${escapeHtml(bucketsB[i].tip)}</div><div class="rp-tip-v rp-tip-b">${escapeHtml(fmt(b))}</div>` : ''}`;
       tip.style.display = '';
       const box = el.getBoundingClientRect(), px = (x(i) / W) * box.width;
       tip.style.left = `${Math.min(box.width - tip.offsetWidth - 4, Math.max(4, px - tip.offsetWidth / 2))}px`;
-      tip.style.top = `${(y(values[i]) / H) * box.height - tip.offsetHeight - 12}px`;
+      tip.style.top = `${Math.max(0, (y(Math.max(a || 0, b || 0)) / H) * box.height - tip.offsetHeight - 12)}px`;
     });
-    svg.querySelector('.rp-hit').addEventListener('mouseleave', () => { cross.style.display = dot.style.display = tip.style.display = 'none'; });
+    hit.addEventListener('mouseleave', () => { cross.style.display = dot.style.display = tip.style.display = 'none'; });
   }
   function niceStep(raw) {
     const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
@@ -284,103 +407,227 @@
   // ---- rendering ----
   function render() {
     if (!data) return;
-    try { localStorage.setItem(VIEW_KEY, JSON.stringify({ view: state.view, measure: state.measure, bucket: state.bucket, sort: state.sort, dir: state.dir })); } catch (e) {}
-    const kind = state.view === 'suppliers' ? 'purchases' : 'sales';
+    try { localStorage.setItem(VIEW_KEY, JSON.stringify({ view: state.view, measure: state.measure, bucket: state.bucket, preset: state.preset, compare: state.compare, customA: state.customA, customB: state.customB, sort: state.sort, dir: state.dir })); } catch (e) {}
+    const kind = kindOf();
     if (!MEASURES[kind].some(m => m[0] === state.measure)) state.measure = 'value';
     document.getElementById('measureSeg').innerHTML = MEASURES[kind].map(([k, l]) => `<button type="button" class="seg-btn${state.measure === k ? ' on' : ''}" data-measure="${k}">${l}</button>`).join('');
     document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === state.view));
     document.querySelectorAll('[data-bucket]').forEach(b => b.classList.toggle('on', b.dataset.bucket === state.bucket));
+    document.getElementById('rpPreset').value = state.preset;
+    document.getElementById('rpCompare').value = state.compare;
+    document.getElementById('rpCategory').value = state.category;
+    document.getElementById('rpCustomA').hidden = state.preset !== 'custom';
+    document.getElementById('rpCustomB').hidden = state.compare !== 'custom';
 
-    const recs = source();
-    const focusRecs = state.focus ? recs.filter(r => entityOf(r) === state.focus) : recs;
+    const { a, b } = periods();
+    const all = scoped();
+    const recsA = all.filter(r => inPeriod(r, a)), recsB = all.filter(r => inPeriod(r, b));
     const measureLabel = MEASURES[kind].find(m => m[0] === state.measure)[1];
-    const what = { customers: 'All customers', suppliers: 'All suppliers', products: 'All products' }[state.view];
-    document.getElementById('rpKicker').innerHTML = state.focus
-      ? `<button type="button" class="rp-back" id="rpBack">← ${escapeHtml(what)}</button>`
-      : `${escapeHtml(measureLabel)} · last 6 months`;
-    document.getElementById('rpTitle').textContent = state.focus || what;
-    const t = trend(focusRecs);
-    const orderCount = new Set(focusRecs.map(r => r.order)).size;
-    document.getElementById('rpStats').innerHTML = `
-      <div class="stat"><span class="l">${escapeHtml(measureLabel)}</span><span class="n">${escapeHtml(fmt(total(focusRecs)))}</span></div>
-      <div class="stat"><span class="l">${kind === 'sales' ? 'Orders' : 'POs'}</span><span class="n">${orderCount}</span></div>
-      <div class="stat"><span class="l">Last 13 wks vs prior</span><span class="n rp-trend ${trendClass(t)}">${escapeHtml(fmtTrend(t))}</span></div>`;
-    const labels = data.buckets[state.bucket].map(b => b.label);
-    lineChart(document.getElementById('rpChart'), series(focusRecs), labels);
-    renderSide(focusRecs, kind);
-    renderTable(recs, kind, measureLabel);
-    document.getElementById('rpBack')?.addEventListener('click', () => { state.focus = null; render(); });
+    const orderWord = kind === 'sales' ? 'Orders' : 'POs';
+
+    const root = { customers: 'All customers', suppliers: 'All suppliers', products: 'All products' }[state.view];
+    document.getElementById('rpKicker').innerHTML = state.path.length
+      ? [`<button type="button" class="rp-back" data-crumb="0">${escapeHtml(root)}</button>`]
+        .concat(state.path.slice(0, -1).map((s, i) => `<button type="button" class="rp-back" data-crumb="${i + 1}">${escapeHtml(s.value)}</button>`)).join(' › ') + ' ›'
+      : `${escapeHtml(measureLabel)}${state.category ? ` · ${escapeHtml(state.category)}` : ''}`;
+    const titleEl = document.getElementById('rpTitle');
+    titleEl.textContent = state.path.length ? state.path[state.path.length - 1].value : root;
+
+    renderStats(all, recsA, recsB, b, kind, measureLabel, orderWord);
+    document.getElementById('rpLegend').innerHTML = `<span class="rp-key"><i class="k-a"></i>${escapeHtml(fmtRange(a))}</span>${b ? `<span class="rp-key"><i class="k-b"></i>${escapeHtml(fmtRange(b))}</span>` : ''}`;
+    const bucketsA = bucketsOf(a), bucketsB = b ? bucketsOf(b) : [];
+    lineChart(document.getElementById('rpChart'), series(recsA, a), b ? series(recsB, b) : [], bucketsA, bucketsB);
+
+    const dim = currentDim();
+    if (dim) {
+      const rows = buildRows(all, dim, a, b);
+      renderSide(rows, dim, !!b);
+      renderTable(rows, dim, a, b, measureLabel, orderWord);
+    } else {
+      renderItemsSide(recsA);
+      renderDeliveries(all, a, b, kind);
+    }
+
+    // Say so when the comparison reaches back before anything was recorded.
+    const earliest = data[kind].reduce((m, r) => !m || r.date < m ? r.date : m, '');
+    setStatus(b && earliest && b.from < earliest ? `Nothing recorded before ${fmtDay(earliest, true)}, so the comparison period (from ${fmtDay(b.from, true)}) is incomplete.` : (kind === 'sales' ? 'Sales at list price, by delivery date.' : 'Purchases at cost price, by order date.'));
   }
 
-  // Top items for the whole view, or the focused customer / supplier /
-  // product (for a product: its top customers).
-  function renderSide(recs, kind) {
-    const byItem = new Map();
-    const keyOf = state.view === 'products' && state.focus ? (r => r.customer || r.supplier) : (r => r.item);
-    recs.forEach(r => {
-      const k = keyOf(r);
-      const x = byItem.get(k) || { name: k, value: 0, kg: 0, orders: new Set() };
-      x.value += r.value; x.kg += r.kg; x.orders.add(r.order);
-      byItem.set(k, x);
-    });
-    const metric = x => state.measure === 'count' ? x.orders.size : x[state.measure];
-    const list = [...byItem.values()].sort((a, b) => metric(b) - metric(a)).slice(0, 8);
+  function renderStats(all, recsA, recsB, b, kind, measureLabel, orderWord) {
+    const stat = (label, value, sub, cls = '') => `<div class="stat"><span class="l">${escapeHtml(label)}</span><span class="n">${escapeHtml(value)}</span>${sub !== undefined ? `<span class="rp-stat-sub ${cls}">${escapeHtml(sub)}</span>` : ''}</div>`;
+    const orders = recs => new Set(recs.map(r => r.order)).size;
+    const value = recs => recs.reduce((s, r) => s + r.value, 0);
+    const vs = (x, y) => b ? (y ? `${fmtPct(change(x, y))} vs ${y}` : 'none to compare') : undefined;
+    const A = total(recsA), B = total(recsB);
+    const out = [stat(measureLabel, fmt(A), b ? (B ? `${fmtPct(change(A, B))} vs ${fmt(B)}` : 'none to compare') : undefined, b && B ? trendClass(change(A, B)) : '')];
+    if (state.measure !== 'count') out.push(stat(orderWord, String(orders(recsA)), vs(orders(recsA), orders(recsB)), b && orders(recsB) ? trendClass(change(orders(recsA), orders(recsB))) : ''));
+    const avg = recs => orders(recs) ? value(recs) / orders(recs) : 0;
+    out.push(stat(`Avg ${orderWord === 'POs' ? 'PO' : 'order'}`, fmt(avg(recsA), 'value'), b ? `vs ${fmt(avg(recsB), 'value')}` : undefined));
+    const dim = currentDim();
+    if (dim) {
+      const n = recs => new Set(recs.map(r => r[dim]).filter(Boolean)).size;
+      out.push(stat(DIM_LABEL[dim], String(n(recsA)), b ? `vs ${n(recsB)}` : undefined));
+    } else {
+      // How often this customer takes this product.
+      const dates = [...new Set(all.map(r => r.date))].sort();
+      const today = iso(new Date());
+      const past = dates.filter(d => d <= today);
+      const last = past[past.length - 1];
+      const gap = past.length > 1 ? Math.round(daysBetween(past[0], last) / (past.length - 1)) : null;
+      out.push(stat('Last', last ? fmtDay(last) : '—', last ? `${daysBetween(last, today)}d ago` : undefined));
+      out.push(stat('Every', gap ? `${gap}d` : '—', 'on average'));
+    }
+    document.getElementById('rpStats').innerHTML = out.join('');
+  }
+
+  // Best / worst / rising / falling / zero: the top of each, click to dig in.
+  function renderSide(rows, dim, hasCompare) {
+    const lenses = LENSES.filter(([k]) => hasCompare || (k !== 'rising' && k !== 'falling'));
+    if (!lenses.some(([k]) => k === state.lens)) state.lens = 'best';
+    const full = lensList(rows, state.lens), list = full.slice(0, 8);
+    const noneWord = kindOf() === 'sales' ? 'No sales' : 'Not bought';
+    const title = { best: 'Highest', worst: 'Lowest, but some', rising: 'Up most', falling: 'Down most', notsold: `${noneWord} this period` }[state.lens];
+    const metric = x => state.lens === 'rising' || state.lens === 'falling' ? Math.abs(x.diff) : x.a;
     const max = Math.max(1e-9, ...list.map(metric));
-    const title = state.view === 'products' && state.focus ? 'Top customers' : (kind === 'sales' ? 'Top items sold' : 'Top items bought');
+    const line = x => {
+      if (state.lens === 'notsold') return x.ever ? (x.b ? `was ${fmt(x.b)}` : x.last ? `last ${fmtDay(x.last)}` : '—') : 'never';
+      if (state.lens === 'rising' || state.lens === 'falling') return `${fmtDiff(x.diff)} · ${fmtPct(x.pct)}`;
+      return fmt(x.a);
+    };
     document.getElementById('rpSide').innerHTML = `
-      <div class="rp-side-h">${title}</div>
+      <div class="seg rp-lens" role="tablist" aria-label="${escapeHtml(DIM_LABEL[dim])} list">${lenses.map(([k, l]) => `<button type="button" class="seg-btn${state.lens === k ? ' on' : ''}" data-lens="${k}">${l}</button>`).join('')}</div>
+      <div class="rp-side-h">${escapeHtml(title)} · ${full.length}</div>
       ${list.length ? list.map(x => `
-        <div class="rp-bar">
-          <div class="rp-bar-t"><span class="rp-bar-name" title="${escapeHtml(x.name)}">${escapeHtml(x.name)}</span><span class="rp-bar-v">${escapeHtml(fmt(metric(x)))}</span></div>
-          <div class="rp-bar-track"><div class="rp-bar-fill" style="width:${(metric(x) / max * 100).toFixed(1)}%"></div></div>
-        </div>`).join('') : '<div class="muted" style="font-size:13px;">Nothing in this period.</div>'}`;
+        <button type="button" class="rp-bar" data-entity="${escapeHtml(x.name)}">
+          <span class="rp-bar-t"><span class="rp-bar-name" title="${escapeHtml(x.name)}">${escapeHtml(x.name)}</span><span class="rp-bar-v">${escapeHtml(line(x))}</span></span>
+          ${state.lens === 'notsold' ? '' : `<span class="rp-bar-track"><span class="rp-bar-fill" style="width:${(metric(x) / max * 100).toFixed(1)}%"></span></span>`}
+        </button>`).join('') : '<div class="muted" style="font-size:13px;">Nothing here.</div>'}`;
   }
 
-  function renderTable(recs, kind, measureLabel) {
-    const groups = new Map();
-    recs.forEach(r => { const k = entityOf(r); if (!k) return; (groups.get(k) || groups.set(k, []).get(k)).push(r); });
-    const grand = total(recs) || 1;
-    let rows = [...groups.entries()].map(([name, rs]) => ({
-      name, rs, total: total(rs), count: new Set(rs.map(r => r.order)).size, trend: trend(rs),
-      last: rs.reduce((m, r) => r.date > m ? r.date : m, '')
-    }));
-    rows.forEach(r => { r.share = r.total / grand; });
-    if (state.term) rows = rows.filter(r => searchMatch(r.name, searchNorm(state.term)));
-    const val = (r, k) => k === 'trend' ? (r.trend === null ? Infinity : r.trend) : r[k];
-    rows.sort((a, b) => state.sort === 'name' || state.sort === 'last'
-      ? state.dir * String(a[state.sort]).localeCompare(String(b[state.sort]))
-      : state.dir * (val(a, state.sort) - val(b, state.sort)));
-    document.getElementById('rpTableTitle').textContent = `${{ customers: 'Customers', suppliers: 'Suppliers', products: 'Products' }[state.view]} · ${rows.length}`;
-    document.getElementById('rpTotalHead').textContent = measureLabel;
-    document.getElementById('rpCountHead').textContent = kind === 'sales' ? 'Orders' : 'POs';
-    document.querySelectorAll('.rp-table th[data-sort]').forEach(th => th.classList.toggle('sorted', th.dataset.sort === state.sort));
-    const day = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—';
-    document.getElementById('rpRows').innerHTML = rows.length ? rows.map(r => `
-      <tr data-entity="${escapeHtml(r.name)}" class="${state.focus === r.name ? 'on' : ''}">
-        <td><strong>${escapeHtml(r.name)}</strong></td>
-        <td>${sparkline(series(r.rs))}</td>
-        <td class="num">${escapeHtml(fmt(r.total))}</td>
+  function renderItemsSide(recs) {
+    const byItem = new Map();
+    recs.forEach(r => (byItem.get(r.item) || byItem.set(r.item, []).get(r.item)).push(r));
+    const list = [...byItem.entries()].map(([name, rs]) => ({ name, v: total(rs) })).sort((p, q) => q.v - p.v);
+    const max = Math.max(1e-9, ...list.map(x => x.v));
+    document.getElementById('rpSide').innerHTML = `
+      <div class="rp-side-h">SKUs this period</div>
+      ${list.length ? list.map(x => `<div class="rp-bar"><span class="rp-bar-t"><span class="rp-bar-name" title="${escapeHtml(x.name)}">${escapeHtml(x.name)}</span><span class="rp-bar-v">${escapeHtml(fmt(x.v))}</span></span><span class="rp-bar-track"><span class="rp-bar-fill" style="width:${(x.v / max * 100).toFixed(1)}%"></span></span></div>`).join('') : '<div class="muted" style="font-size:13px;">Nothing this period.</div>'}`;
+  }
+
+  function renderTable(rows, dim, a, b, measureLabel, orderWord) {
+    let shown = state.lens === 'notsold' ? rows.filter(x => !x.a) : rows.filter(x => x.a || x.b);
+    if (state.term) shown = shown.filter(r => searchMatch(r.name, searchNorm(state.term)));
+    const sortKey = !b && ['b', 'diff', 'pct'].includes(state.sort) ? 'a' : state.sort;
+    const val = (r, k) => k === 'pct' ? (r.pct === null ? Infinity : r.pct) : r[k];
+    shown = [...shown].sort((p, q) => sortKey === 'name' || sortKey === 'last'
+      ? state.dir * String(p[sortKey]).localeCompare(String(q[sortKey]))
+      : state.dir * (val(p, sortKey) - val(q, sortKey)));
+    document.getElementById('rpTableTitle').textContent = `${state.lens === 'notsold' ? `${DIM_LABEL[dim]} with none this period` : DIM_LABEL[dim]} · ${shown.length}`;
+    const th = (k, label, num) => `<th data-sort="${k}"${num ? ' class="num' + (sortKey === k ? ' sorted' : '') + '"' : sortKey === k ? ' class="sorted"' : ''}>${escapeHtml(label)}${sortKey === k ? (state.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`;
+    document.getElementById('rpHeadRow').innerHTML = `
+      ${th('name', dim === 'product' ? 'Product' : dim === 'customer' ? 'Customer' : 'Supplier')}
+      <th>This period</th>
+      ${th('a', measureLabel, true)}
+      ${b ? th('b', 'Compared', true) + th('diff', 'Change', true) + th('pct', '%', true) : ''}
+      ${th('share', 'Share', true)}
+      ${th('count', orderWord, true)}
+      ${th('last', 'Last')}`;
+    const label = r => dim === 'product' ? productCellHtml(r.name) : `<strong>${escapeHtml(r.name)}</strong>`;
+    document.getElementById('rpRows').innerHTML = shown.length ? shown.map(r => `
+      <tr data-entity="${escapeHtml(r.name)}">
+        <td>${label(r)}</td>
+        <td>${sparkline(series(r.recsA, a))}</td>
+        <td class="num">${escapeHtml(fmt(r.a))}</td>
+        ${b ? `<td class="num muted">${escapeHtml(fmt(r.b))}</td>
+        <td class="num">${escapeHtml(fmtDiff(r.diff))}</td>
+        <td class="num"><span class="rp-trend ${trendClass(r.pct)}">${escapeHtml(fmtPct(r.pct))}</span></td>` : ''}
         <td class="num">${(r.share * 100).toFixed(1)}%</td>
         <td class="num">${r.count}</td>
-        <td class="num"><span class="rp-trend ${trendClass(r.trend)}">${escapeHtml(fmtTrend(r.trend))}</span></td>
-        <td>${escapeHtml(day(r.last))}</td>
-      </tr>`).join('') : `<tr><td colspan="7" class="empty" style="padding:18px;">Nothing in the last 6 months.</td></tr>`;
+        <td>${r.last ? escapeHtml(fmtDay(r.last)) : '—'}</td>
+      </tr>`).join('') : `<tr><td colspan="9" class="empty" style="padding:18px;">Nothing in these periods.</td></tr>`;
+    exportRows = [[DIM_LABEL[dim], measureLabel, ...(b ? ['Compared', 'Change', 'Change %'] : []), 'Share %', orderWord, 'Last'],
+      ...shown.map(r => [r.name, round2(r.a), ...(b ? [round2(r.b), round2(r.diff), r.pct === null ? 'new' : Math.round(r.pct * 100)] : []), round2(r.share * 100), r.count, r.last])];
+  }
+  const round2 = n => Math.round(n * 100) / 100;
+  function productCellHtml(name) {
+    const p = data.thumbFor[name];
+    return `<span class="rp-prod">${p ? productThumb(p, 'xs') : ''}<strong>${escapeHtml(name)}</strong></span>`;
+  }
+
+  // Bottom of a drill-down: each delivery of this product to this customer.
+  function renderDeliveries(all, a, b, kind) {
+    let list = [...all].sort((p, q) => q.date.localeCompare(p.date));
+    if (state.term) list = list.filter(r => searchMatch(`${r.item} ${r.order}`, searchNorm(state.term)));
+    const page = kind === 'sales' ? 'orders.html' : 'purchase-orders.html';
+    document.getElementById('rpTableTitle').textContent = `${kind === 'sales' ? 'Deliveries' : 'Purchase orders'} · ${list.length}`;
+    document.getElementById('rpHeadRow').innerHTML = `<th>Date</th><th>Period</th><th>${kind === 'sales' ? 'Order' : 'PO'}</th><th>SKU</th><th class="num">Qty</th><th class="num">Weight</th><th class="num">Value</th>`;
+    const tag = r => inPeriod(r, a) ? '<span class="tag t-ok">This period</span>' : inPeriod(r, b) ? '<span class="tag t-chill">Compared</span>' : '<span class="muted">—</span>';
+    document.getElementById('rpRows').innerHTML = list.length ? list.map(r => `
+      <tr class="rp-leaf">
+        <td>${escapeHtml(fmtDay(r.date, true))}</td>
+        <td>${tag(r)}</td>
+        <td><a class="code" href="${page}?open=${encodeURIComponent(r.order)}">${escapeHtml(r.order)}</a></td>
+        <td>${escapeHtml(r.item)}</td>
+        <td class="num">${escapeHtml(qtyUnit(round2(r.qty), r.unit))}</td>
+        <td class="num">${r.kg ? escapeHtml(fmt(r.kg, 'kg')) : '—'}</td>
+        <td class="num">${escapeHtml(fmt(r.value, 'value'))}</td>
+      </tr>`).join('') : `<tr><td colspan="7" class="empty" style="padding:18px;">Nothing recorded.</td></tr>`;
+    exportRows = [['Date', kind === 'sales' ? 'Order' : 'PO', 'SKU', 'Qty', 'Unit', 'Weight kg', 'Value'],
+      ...list.map(r => [r.date, r.order, r.item, round2(r.qty), r.unit, round2(r.kg), round2(r.value)])];
+  }
+
+  function downloadCsv() {
+    const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+    const csv = exportRows.map(r => r.map(cell).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `provisions-${state.view}${state.path.map(s => '-' + s.value.replace(/[^\w]+/g, '_')).join('')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function dateInput(id, holder, key) {
+    document.getElementById(id).addEventListener('change', e => { state[holder][key] = e.target.value; render(); });
   }
 
   document.addEventListener('click', e => {
     const v = e.target.closest('[data-view]');
-    if (v) { state.view = v.dataset.view; state.focus = null; render(); return; }
+    if (v) { state.view = v.dataset.view; state.path = []; state.lens = 'best'; render(); return; }
     const m = e.target.closest('[data-measure]');
     if (m) { state.measure = m.dataset.measure; render(); return; }
     const b = e.target.closest('[data-bucket]');
     if (b) { state.bucket = b.dataset.bucket; render(); return; }
-    const th = e.target.closest('.rp-table th[data-sort]');
+    const crumb = e.target.closest('[data-crumb]');
+    if (crumb) { state.path = state.path.slice(0, parseInt(crumb.dataset.crumb, 10)); state.lens = 'best'; render(); return; }
+    const lens = e.target.closest('[data-lens]');
+    if (lens) { state.lens = lens.dataset.lens; render(); return; }
+    const th = e.target.closest('th[data-sort]');
     if (th) { if (state.sort === th.dataset.sort) state.dir *= -1; else { state.sort = th.dataset.sort; state.dir = th.dataset.sort === 'name' ? 1 : -1; } render(); return; }
-    const tr = e.target.closest('#rpRows tr[data-entity]');
-    if (tr) { state.focus = state.focus === tr.dataset.entity ? null : tr.dataset.entity; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    const row = e.target.closest('[data-entity]');
+    if (row && currentDim()) {
+      state.path = state.path.concat({ dim: currentDim(), value: row.dataset.entity });
+      state.lens = 'best';
+      state.term = '';
+      document.getElementById('rpSearch').value = '';
+      render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   });
   document.getElementById('rpSearch').addEventListener('input', e => { state.term = e.target.value.trim(); render(); });
-  window.addEventListener('load', load);
+  document.getElementById('rpPreset').addEventListener('change', e => { state.preset = e.target.value; render(); });
+  document.getElementById('rpCompare').addEventListener('change', e => { state.compare = e.target.value; render(); });
+  document.getElementById('rpCategory').addEventListener('change', e => { state.category = e.target.value; render(); });
+  document.getElementById('rpCsv').addEventListener('click', downloadCsv);
+  dateInput('rpAFrom', 'customA', 'from'); dateInput('rpATo', 'customA', 'to');
+  dateInput('rpBFrom', 'customB', 'from'); dateInput('rpBTo', 'customB', 'to');
+  window.addEventListener('load', () => {
+    ['from', 'to'].forEach(k => {
+      document.getElementById(`rpA${k === 'from' ? 'From' : 'To'}`).value = state.customA[k] || '';
+      document.getElementById(`rpB${k === 'from' ? 'From' : 'To'}`).value = state.customB[k] || '';
+    });
+    load();
+  });
 </script>
 </body>
 </html>

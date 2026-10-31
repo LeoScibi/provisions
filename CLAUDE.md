@@ -170,8 +170,10 @@ stock-take.html                    Physical count vs. system quantity
 orders.html                          Place orders, allocate stock
 lists.html                             Cutting list, packing slips (truck order, box
                                        counts), delivery notes, box labels
-reports.html                             6-month sales / purchase trends by customer,
-                                         supplier and product (computed, nothing stored)
+reports.html                             Sales / purchases for any period against another:
+                                         drill customer → product → deliveries (or the
+                                         reverse), best / worst / rising / falling / not
+                                         sold, CSV (computed, nothing stored)
 test-data.html                           Generates / removes 6 months of TEST-tagged
                                          orders, POs, deliveries and allocations
 ```
