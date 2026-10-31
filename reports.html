@@ -345,7 +345,7 @@
   // ---- the chart: this period, and the comparison behind it ----
   function lineChart(el, valuesA, valuesB, bucketsA, bucketsB) {
     const W = 760, H = 260, L = 56, R = 16, T = 16, B = 28;
-    const n = Math.max(valuesA.length, valuesB.length, 1);
+    const n = valuesA.length;
     const max = Math.max(1, ...valuesA, ...valuesB) * 1.1;
     const step = niceStep(max / 4);
     const top = Math.ceil(max / step) * step;
@@ -353,7 +353,6 @@
     const y = v => T + (H - T - B) * (1 - v / top);
     const ticks = []; for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
     const pts = vals => vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-    const labelOf = i => (bucketsA[i] || bucketsB[i]).label;
     const labelEvery = Math.ceil(n / 8);
     const dots = n <= 4;
     el.innerHTML = `
@@ -363,7 +362,7 @@
           // Every Nth label, plus the last one unless it would crowd the one before.
           const last = i === n - 1;
           const show = i % labelEvery === 0 || (last && i % labelEvery >= labelEvery / 2);
-          return show ? `<text x="${x(i)}" y="${H - 8}" class="rp-axis" text-anchor="${last && n > 1 ? 'end' : 'middle'}">${escapeHtml(labelOf(i))}</text>` : '';
+          return show ? `<text x="${x(i)}" y="${H - 8}" class="rp-axis" text-anchor="${last && n > 1 ? 'end' : 'middle'}">${escapeHtml(bucketsA[i].label)}</text>` : '';
         }).join('')}
         ${valuesB.length ? `<polyline points="${pts(valuesB)}" class="rp-line-b"/>` : ''}
         <polygon points="${x(0)},${y(0)} ${pts(valuesA)} ${x(valuesA.length - 1)},${y(0)}" class="rp-area"/>
@@ -383,8 +382,8 @@
       const i = Math.max(0, Math.min(n - 1, Math.round((sx - L) / ((W - L - R) / Math.max(1, n - 1)))));
       const a = valuesA[i], b = valuesB[i];
       cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.style.display = '';
-      if (a !== undefined) { dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(a)); dot.style.display = ''; } else dot.style.display = 'none';
-      tip.innerHTML = `${a !== undefined ? `<div class="rp-tip-k">${escapeHtml(bucketsA[i].tip)}</div><div class="rp-tip-v">${escapeHtml(fmt(a))}</div>` : ''}
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(a)); dot.style.display = '';
+      tip.innerHTML = `<div class="rp-tip-k">${escapeHtml(bucketsA[i].tip)}</div><div class="rp-tip-v">${escapeHtml(fmt(a))}</div>
         ${b !== undefined ? `<div class="rp-tip-k">${escapeHtml(bucketsB[i].tip)}</div><div class="rp-tip-v rp-tip-b">${escapeHtml(fmt(b))}</div>` : ''}`;
       tip.style.display = '';
       const box = el.getBoundingClientRect(), px = (x(i) / W) * box.width;
@@ -435,8 +434,13 @@
 
     renderStats(all, recsA, recsB, b, kind, measureLabel, orderWord);
     document.getElementById('rpLegend').innerHTML = `<span class="rp-key"><i class="k-a"></i>${escapeHtml(fmtRange(a))}</span>${b ? `<span class="rp-key"><i class="k-b"></i>${escapeHtml(fmtRange(b))}</span>` : ''}`;
+    // The chart's points are this period's. The same number of days can touch
+    // one more calendar month in the comparison, so that gets cut to fit.
     const bucketsA = bucketsOf(a), bucketsB = b ? bucketsOf(b) : [];
-    lineChart(document.getElementById('rpChart'), series(recsA, a), b ? series(recsB, b) : [], bucketsA, bucketsB);
+    if (state.compare === 'custom' && bucketsB.length > bucketsA.length) {
+      document.getElementById('rpLegend').insertAdjacentHTML('beforeend', `<span class="rp-key">chart shows its first ${bucketsA.length} ${state.bucket === 'week' ? 'weeks' : 'months'}</span>`);
+    }
+    lineChart(document.getElementById('rpChart'), series(recsA, a), b ? series(recsB, b).slice(0, bucketsA.length) : [], bucketsA, bucketsB);
 
     const dim = currentDim();
     if (dim) {
