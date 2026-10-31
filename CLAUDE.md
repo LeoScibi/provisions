@@ -125,7 +125,12 @@ models, sheet schemas, or conventions between the two.
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
   another day adds "Requested delivery: …" to the notes. Its button row shows a
   live total ex VAT (`renderOrderTotal()`): list price, as in Reports, less the
-  customer's Discount (%). In the order dialog each line shows its free stock;
+  customer's Discount (%). Clicking a product there opens a lot pop-up
+  (`openLotPicker()`): quantity, plus lots on the shelf and POs arriving with days
+  left, FEFO-prefilled and editable. The choice stays on the draft line (`picks`)
+  until `autoAllocate()` writes it at placing; POs due too late show but can't be
+  reserved, and a new delivery date re-picks lots that no longer fit. A whole wheel
+  ordered by the piece draws its nominal kilos (`stockSource(code, lineUnit)`). In the order dialog each line shows its free stock;
   **Allocate** opens a pop-up of lots (FEFO-prefilled), **Allocate all**
   fills every line FEFO from a shared pool, and **Replace** swaps a line's
   product: the line keeps its original code in OrderLines.`REPLACES` (shown as
