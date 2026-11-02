@@ -61,6 +61,10 @@ models, sheet schemas, or conventions between the two.
   relies on (delete highest row index first within a sheet, since deleting
   a row shifts every later row's index down).
 
+- **Installable:** `manifest.webmanifest` plus the `img/icon-*.png` icons, linked
+  from every page's head (add those three lines to any new page). There's no
+  service worker, so the installed app still needs signal to open a page.
+
 ## Sheet schema (see `setup.html`'s `REQUIRED_TABS` for the source of truth)
 - **Products** — item master, one row per SKU keyed by `Product code`
   (natural key, not an auto-id). Mirrors the Xero-linked schema: cost/landed
