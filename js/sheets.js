@@ -114,12 +114,12 @@ async function sheetsDeleteRows(spreadsheetId, tabTitle, rowNumbers) {
   await sheetsBatchUpdate(spreadsheetId, requests);
 }
 
-// Returns [{ sheetId, title }] for every tab in the spreadsheet.
+// Returns [{ sheetId, title, columnCount }] for every tab in the spreadsheet.
 async function sheetsGetTabs(spreadsheetId, token) {
-  const url = `${sheetsBaseUrl(spreadsheetId)}?fields=sheets.properties(sheetId,title)`;
+  const url = `${sheetsBaseUrl(spreadsheetId)}?fields=sheets.properties(sheetId,title,gridProperties.columnCount)`;
   const res = await googleFetch(url);
   const data = await sheetsHandle(res);
-  return (data.sheets || []).map(s => ({ sheetId: s.properties.sheetId, title: s.properties.title }));
+  return (data.sheets || []).map(s => ({ sheetId: s.properties.sheetId, title: s.properties.title, columnCount: s.properties.gridProperties.columnCount }));
 }
 
 // Runs a batchUpdate (structural changes: add sheets, formatting, etc).

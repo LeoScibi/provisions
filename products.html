@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=45">
+<link rel="stylesheet" href="css/style.css?v=46">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -93,6 +93,7 @@
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/stock-calc.js?v=4"></script>
 <script src="js/crud-page.js?v=21"></script>
+<script src="js/snippet.js?v=1"></script>
 <script>
   function requireAuth() {
     const cfg = getStoredConfig();
@@ -189,7 +190,7 @@
   // product's Shop SKU / Selfridges SKU fields, which fill those two
   // channels — one SKU each, either may be empty.
 
-  const GROUP_HEADERS = ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category'];
+  const GROUP_HEADERS = ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category','Origin','Maker','Tasting note','Story','Badges','New','Section'];
   const CATEGORIES = ['Biscuits','Charcuterie','Cheese','Condiment','Deli & Snacks','Jam','Non-Food','Oil','Pasta','Preserved Veg','Pâté & Terrine','Ready Meals','Tinned Fish','Vinegar'];
 
   let skusTable = null, groupsTable = null, skuOpenEdit = null;
@@ -200,7 +201,7 @@
   let openGroupSkus = null; // re-renders an open product's SKUs tab after a change
 
   function indexSkus(rows, get) {
-    const head = ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID'];
+    const head = ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID','Size','List price £'];
     const all = rows.map(r => ({ rowNumber: r.rowNumber, ...Object.fromEntries(head.map(h => [h, (get(r.values, h) ?? '').toString()])) }))
       .filter(p => p['Product code']);
     const byGroup = {}, byCode = {};
@@ -284,7 +285,14 @@
         { key: 'Training notes', label: 'Training notes', type: 'textarea', section: 'Docs & training', placeholder: 'Cutting, storage, allergens, talking points…' },
         { key: 'Notes', label: 'Notes', type: 'textarea' },
         { key: 'Active', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No' },
-        { key: 'Category', label: 'Category', type: 'select', options: CATEGORIES }
+        { key: 'Category', label: 'Category', type: 'select', options: CATEGORIES },
+        { key: 'Origin', label: 'Origin', type: 'text', section: 'Portfolio', placeholder: 'e.g. Suffolk, UK' },
+        { key: 'Maker', label: 'Maker', type: 'text', section: 'Portfolio', placeholder: 'The person behind it, e.g. Jonny Crickmore' },
+        { key: 'Tasting note', label: 'Tasting note', type: 'textarea', section: 'Portfolio', placeholder: 'The bold line: how it tastes' },
+        { key: 'Story', label: 'Story', type: 'textarea', section: 'Portfolio', placeholder: 'The paragraph under it: where it comes from, how to use it' },
+        { key: 'Badges', label: 'Badges', type: 'text', section: 'Portfolio', placeholder: "Comma-separated: Raw milk, Pasteurised, Thermised, Vegetarian rennet, Grab & go, Cow's milk, Goat's milk, Sheep's milk, Meat slicer required, London delivery only" },
+        { key: 'New', label: 'New this season', type: 'checkbox', section: 'Portfolio', trueValue: 'Yes', falseValue: 'No' },
+        { key: 'Section', label: 'Portfolio section', type: 'text', section: 'Portfolio', placeholder: "e.g. Soft cow's milk cheese" }
       ],
       catalogue: {
         layout: 'cards',
@@ -329,6 +337,21 @@
     });
   }
 
+  // The snippet's NEW ribbon goes straight to the sheet, so also tick the box
+  // on the Portfolio tab behind it, or saving that form would undo it.
+  async function saveGroupRibbon(id, on) {
+    const value = on ? 'Yes' : 'No';
+    const spreadsheetId = getStoredConfig().spreadsheetId;
+    const rows = await sheetsGet(spreadsheetId, 'ProductGroups!A:A');
+    const index = rows.findIndex(r => r[0] === id);
+    if (index < 0) throw new Error(`${id} isn't on the sheet any more.`);
+    await sheetsUpdateRange(spreadsheetId, `ProductGroups!${colLetter(GROUP_HEADERS.indexOf('New') + 1)}${index + 1}`, [[value]]);
+    const label = [...document.querySelectorAll('#groupsMount label, dialog label')].find(l => l.textContent.trim() === 'New this season');
+    const box = label?.parentElement.querySelector('input[type="checkbox"]');
+    if (box) box.checked = on;
+    (await groupsTable).reload();
+  }
+
   // The SKUs tab of a product: Wholesale (link / unlink / add), Shop and
   // Selfridges. Clicking a SKU opens its own record on top.
   function renderGroupSkus(container, pick) {
@@ -355,6 +378,7 @@
 
     container.innerHTML = `
       <div class="sp-section">
+        <div class="cz-snippet"><button type="button" class="btn ghost sm" id="pg_snippetBtn">Snippet</button></div>
         <div class="cz-channel"><h4>Wholesale <span class="code">${wholesale.length}</span></h4>
           ${wholesale.length ? wholesale.map(p => skuRow(p, true)).join('') : '<div class="cz-empty">No wholesale SKUs yet.</div>'}
           <div class="cz-link">
@@ -373,6 +397,12 @@
       showToast(value ? `Added ${p['Product name']}` : `Took out ${p['Product name']}`);
       (await skusTable).reload(); // re-indexes, which re-renders this tab
     };
+    container.querySelector('#pg_snippetBtn').addEventListener('click', () => openSnippet({
+      pick,
+      skus: wholesale,
+      photo: (pick('Photo URL') || '').trim() || productPhoto(wholesale[0] || null),
+      setRibbon: on => saveGroupRibbon(pick('ID'), on)
+    }));
     container.querySelector('#pg_linkBtn').addEventListener('click', () => {
       const code = container.querySelector('#pg_linkSel').value;
       if (code) setGroup(code, id).catch(err => showToast('Couldn’t add: ' + err.message, 'error'));
@@ -564,7 +594,7 @@
       mount: '#productsMount',
       title: 'SKUs',
       tab: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID'],
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID','Size','List price £'],
       autoId: null,
       fields: [
         { key: 'Product code', label: 'Product code', type: 'text', required: true, placeholder: 'e.g. CCS050' },
@@ -610,7 +640,9 @@
           key: 'Training notes', label: 'Training sheet', type: 'textarea', section: 'Docs & training',
           placeholder: 'Everything staff should know handling this product — cutting, storage, allergens, talking points...'
         },
-        { key: 'Group ID', label: 'Product', type: 'text', placeholder: "e.g. PG012 — usually set from the product's SKUs tab" }
+        { key: 'Group ID', label: 'Product', type: 'text', placeholder: "e.g. PG012 — usually set from the product's SKUs tab" },
+        { key: 'Size', label: 'Size', type: 'text', placeholder: 'As printed in the portfolio, e.g. 180g or 3kg 1/2' },
+        { key: 'List price £', label: 'List price (£)', type: 'number', format: 'currency', placeholder: 'Per kg or per unit, by the pricing basis' }
       ],
       // Feeds the product cards (their SKUs, stock and photos) — and so
       // re-runs after every SKU save.

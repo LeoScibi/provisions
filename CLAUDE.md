@@ -80,6 +80,14 @@ models, sheet schemas, or conventions between the two.
   `js/product-ui.js`). "Group SKUs into products" on the Products page is the
   re-runnable grouping. Was the cheese-only "Cheeses" tab / `Cheese ID`
   column; Setup renames those in place (`TAB_RENAMES` / `HEADER_RENAMES`).
+  `Origin`, `Maker`, `Tasting note`, `Story`, `Badges` (comma-separated),
+  `New` and `Section` are the wholesale portfolio's wording for the product;
+  Products.`Size` and `List price £` are what it prints per SKU. `List price £`
+  is the printed price: Orders and Reports still calculate theirs from `GP at
+  list`, which doesn't always match it.
+  The "Snippet" button on a product's SKUs tab (`js/snippet.js`) shows those
+  fields as one card in the portfolio's design, to save as a PNG or print; its
+  NEW ribbon is switched on there and stored in `New`.
 - **Suppliers**, **Customers**, **TransportCompanies** — reference lists.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected

@@ -37,7 +37,7 @@
 </main>
 
 <script src="js/config.js?v=5"></script>
-<script src="js/sheets.js?v=6"></script>
+<script src="js/sheets.js?v=7"></script>
 <script src="js/shell.js?v=10"></script>
 <script>
   // Data model:
@@ -53,6 +53,9 @@
   //                Products page's bulk photo upload tool (js/drive.js) —
   //                it's a plain URL column so it also accepts a manually
   //                pasted image link.
+  //                Size and List price £ are what the portfolio prints: List
+  //                price £ is the printed price, not yet used by Orders or
+  //                Reports, which still work theirs out from GP at list.
   //   Suppliers  — keyed by supplier name (no generated ID). Import/dispatch
   //                rates and delivery-day fields support future landed-cost
   //                and ordering-schedule automation.
@@ -125,7 +128,7 @@
   const REQUIRED_TABS = [
     {
       title: 'Products',
-      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID']
+      headers: ['Product code','Product name','Category','Default supplier','Producer','Storage','Ordering unit','Units per case','Pricing basis','Nominal weight (kg)','Cost price £','Landed cost £','GP at list','Tolerance band (%)','Cut from (code)','Cut shelf life (days)','Part-cut shelf life (days)','Target pack weight (kg)','Xero item code','Xero account code','VAT rate','Active','Sellable','Notes','Photo URL','Reorder threshold','Tech sheet URL','Training notes','Group ID','Size','List price £']
     },
     {
       title: 'Suppliers',
@@ -183,8 +186,9 @@
       // channels — one SKU each, either may be empty. Was "Cheeses" (with
       // Products."Cheese ID") before it covered every category; Setup
       // renames the old tab and columns in place (TAB_RENAMES / HEADER_RENAMES).
+      // Origin to Section are the wording of the wholesale portfolio.
       title: 'ProductGroups',
-      headers: ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category']
+      headers: ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category','Origin','Maker','Tasting note','Story','Badges','New','Section']
     },
     {
       // Hauliers that bring goods in to Provisions, with contact details
@@ -319,7 +323,8 @@
         const requests = missing.map(t => ({ addSheet: { properties: { title: t.title } } }));
         const result = await sheetsBatchUpdate(cfg.spreadsheetId, requests, token);
         result.replies.forEach((reply, i) => {
-          existingTabs.push({ sheetId: reply.addSheet.properties.sheetId, title: missing[i].title });
+          const props = reply.addSheet.properties;
+          existingTabs.push({ sheetId: props.sheetId, title: missing[i].title, columnCount: props.gridProperties.columnCount });
         });
       } catch (err) {
         setStatus('Error creating tabs: ' + err.message, 'error');
@@ -333,6 +338,12 @@
       const meta = existingTabs.find(t => t.title === tab.title);
       let statusBadge;
       try {
+        // A range past the tab's last column is an error, for reads as well
+        // as writes, so grow the tab first.
+        if (meta.columnCount < tab.headers.length) {
+          await sheetsBatchUpdate(cfg.spreadsheetId, [{ appendDimension: { sheetId: meta.sheetId, dimension: 'COLUMNS', length: tab.headers.length - meta.columnCount } }], token);
+          meta.columnCount = tab.headers.length;
+        }
         const endCol = colLetterLocal(tab.headers.length);
         const firstRow = await sheetsGet(cfg.spreadsheetId, `${tab.title}!A1:${endCol}1`, token);
         const existingLen = firstRow.length ? firstRow[0].filter(c => (c || '').trim() !== '').length : 0;

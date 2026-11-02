@@ -938,3 +938,42 @@ select.cp-lot{margin-top:6px;width:auto;max-width:100%;min-height:36px;font-size
 .trace-stats>div{background:var(--white);padding:12px 18px}
 .trace-stats .l{font-size:11.5px;color:var(--steel)}
 .trace-stats .n{font-size:18px;font-weight:700;color:var(--ink);margin-top:2px}
+
+/* Product snippet (js/snippet.js): one card in the wholesale portfolio's design */
+.cz-snippet{display:flex;justify-content:flex-end;margin-bottom:8px}
+.sn-dialog{border:none;border-radius:12px;padding:20px;width:min(500px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto}
+.sn-dialog::backdrop{background:rgba(20,28,45,.5)}
+.sn-dialog .note{margin:12px 0 0}
+.sn-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}
+.sn-toggle{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600}
+.sn-spacer{flex:1}
+.sn-preview{overflow-x:auto}
+.sn-card{--sn-ink:#2D3750;width:440px;box-sizing:border-box;padding:18px 22px 22px;background:#FAF4E3;color:var(--sn-ink);font-family:Aileron,Archivo,system-ui,sans-serif;font-size:11.5px;line-height:1.3;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.sn-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px;font-size:11px;font-weight:700;letter-spacing:-.01em}
+.sn-mark{flex:none;font-weight:500;text-align:right}
+.sn-mark i{font-style:normal;font-weight:400}
+.sn-top{display:flex;gap:12px;align-items:flex-start;margin-bottom:12px}
+.sn-photo{position:relative;flex:0 0 150px;min-height:120px;overflow:hidden;text-align:center}
+.sn-photo>img{max-width:150px;max-height:150px;width:auto;height:auto;display:inline-block}
+.sn-ribbon{position:absolute;left:-30px;top:12px;width:110px;padding:2px 0;background:#ED0F12;color:#fff;font-size:10px;font-weight:700;letter-spacing:.06em;text-align:center;transform:rotate(-45deg)}
+.sn-info{flex:1;min-width:0;text-align:right}
+.sn-titlebar{display:flex;justify-content:flex-end;align-items:flex-start;gap:5px}
+.sn-card h2{margin:0;font-family:inherit;font-size:21px;line-height:1;font-weight:700;letter-spacing:-.045em;text-transform:uppercase;color:var(--sn-ink);text-align:right}
+.sn-badges{flex:none;display:flex;flex-direction:column;align-items:center;gap:2px}
+.sn-badges img{width:17px;height:17px;display:block}
+.sn-badges img.wide{width:24px;height:auto}
+.sn-rule{width:62px;height:1px;margin:6px 22px 6px auto;background:var(--sn-ink)}
+.sn-origin{font-size:12px}
+.sn-maker{margin-top:3px;font-size:10px}
+.sn-sticker{display:inline-block;margin-top:5px;padding:2px 6px;border-radius:3px;background:#ED0F12;color:#fff;font-size:8.5px;font-weight:700}
+.sn-buy{margin-top:8px;display:flex;justify-content:flex-end;align-items:flex-end;gap:10px}
+.sn-price{font-size:14px;font-weight:700;white-space:nowrap}
+.sn-skus{font-size:11px}
+.sn-skus b{font-weight:700}
+.sn-tasting{margin:0 0 7px;font-weight:700;font-size:11.5px}
+.sn-story{margin:0;font-size:11.5px}
+#snippetPrint{display:none}
+@media print{
+  body.snippet-printing>*{display:none!important}
+  body.snippet-printing>#snippetPrint{display:block!important}
+}
