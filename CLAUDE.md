@@ -23,7 +23,7 @@ models, sheet schemas, or conventions between the two.
   markup isn't present).
 - **App chrome lives in `js/shell.js`**, included on every page: it builds
   the top bar nav (pages only carry an empty `<header id="topbar">`; add a
-  new page to its `NAV` list), the account menu (Setup and Sign out live
+  new page to its `NAV` list, under one of the dropdown groups), the account menu (Setup and Sign out live
   there), toasts (`showToast`), and all loading feedback — page loader,
   top-bar progress bar, and a spinner on the clicked button — driven by the
   `google-request` events that `googleFetch` fires. It also opens orders

@@ -16,21 +16,30 @@
 (function () {
   const ICON = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
-  // Groups are separated by a hairline in the bar. Setup lives in the account menu.
+  // A single page sits straight in the bar; a [title, pages] pair is a dropdown,
+  // its pages in working order. Setup lives in the account menu.
   const NAV = [
-    [['index.html', 'Dashboard', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>']],
-    [['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
-     ['suppliers.html', 'Suppliers', '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/>'],
-     ['customers.html', 'Customers', '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.2 6.5-6.2s6.5 2.6 6.5 6.2"/><circle cx="17.5" cy="9" r="2.3"/><path d="M15.8 13.5c2.6.5 4.2 2.4 4.2 5"/>'],
-     ['transport.html', 'Transport', '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>']],
-    [['purchase-orders.html', 'Purchase orders', '<path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'],
-     ['receiving.html', 'Goods in', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'],
-     ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],
-     ['cutting.html', 'Cutting', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>'],
-     ['lists.html', 'Packing lists', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>']],
-    [['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
-     ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>'],
-     ['reports.html', 'Reports', '<path d="M4 19h16"/><path d="M5 15l4-4 3 3 6-7"/><path d="M15 7h3v3"/>']]
+    ['index.html', 'Dashboard', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'],
+    ['Sales', [
+      ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],
+      ['cutting.html', 'Cutting', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>'],
+      ['lists.html', 'Packing lists', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>']
+    ]],
+    ['Buying', [
+      ['purchase-orders.html', 'Purchase orders', '<path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'],
+      ['receiving.html', 'Goods in', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>']
+    ]],
+    ['Stock', [
+      ['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
+      ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>']
+    ]],
+    ['Records', [
+      ['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
+      ['suppliers.html', 'Suppliers', '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/>'],
+      ['customers.html', 'Customers', '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.2 6.5-6.2s6.5 2.6 6.5 6.2"/><circle cx="17.5" cy="9" r="2.3"/><path d="M15.8 13.5c2.6.5 4.2 2.4 4.2 5"/>'],
+      ['transport.html', 'Transport', '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>']
+    ]],
+    ['reports.html', 'Reports', '<path d="M4 19h16"/><path d="M5 15l4-4 3 3 6-7"/><path d="M15 7h3v3"/>']
   ];
 
   const page = location.pathname.split('/').pop() || 'index.html';
@@ -40,15 +49,31 @@
   function renderTopbar() {
     const bar = document.getElementById('topbar');
     if (!bar) return;
-    const links = NAV.map(group => `<div class="nav-group">${group.map(([href, label, icon]) =>
-      `<a href="${href}"${href === page ? ' class="active" aria-current="page"' : ''}>${ICON(icon)}<span>${label}</span></a>`
-    ).join('')}</div>`).join('');
+    const isGroup = entry => Array.isArray(entry[1]);
+    const pagesOf = entry => isGroup(entry) ? entry[1] : [entry];
+    const here = NAV.flatMap(pagesOf).find(([href]) => href === page);
+    const pageLink = ([href, label, icon]) =>
+      `<a href="${href}"${href === page ? ' class="active" aria-current="page"' : ''}>${ICON(icon)}<span>${label}</span></a>`;
+    const chevron = '<svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    const links = NAV.map(entry => !isGroup(entry) ? pageLink(entry) : `
+      <details class="nav-menu">
+        <summary${entry[1].some(([href]) => href === page) ? ' class="active"' : ''}>${entry[0]}${chevron}</summary>
+        <div class="nav-drop">${entry[1].map(pageLink).join('')}</div>
+      </details>`).join('');
+    // On a phone the whole nav is one menu, every page a large target.
+    const phoneLinks = NAV.map(entry => isGroup(entry)
+      ? `<div class="nav-phone-group"><div class="nav-phone-h">${entry[0]}</div>${entry[1].map(pageLink).join('')}</div>`
+      : `<div class="nav-phone-group">${pageLink(entry)}</div>`).join('');
     bar.innerHTML = `
       <a class="brand" href="index.html" aria-label="Provisions — Dashboard">
         <span class="brand-mark"><img src="img/logo.png" alt=""></span>
         <span class="brand-name">Provisions</span>
       </a>
       <nav class="nav" aria-label="Main">${links}</nav>
+      <details class="nav-menu nav-phone">
+        <summary aria-label="Menu${here ? ', on ' + here[1] : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>${here ? here[1] : 'Menu'}</span></summary>
+        <nav class="nav-drop" aria-label="Main">${phoneLinks}</nav>
+      </details>
       <details class="account">
         <summary class="avatar" aria-label="Account"><span data-initial>·</span></summary>
         <div class="menu">
@@ -63,13 +88,17 @@
       clearSession();
       location.href = 'index.html';
     });
-    // Close the account menu when clicking anywhere else.
+    // One menu open at a time: clicking anywhere else, or Escape, closes it.
+    const openMenus = () => [...bar.querySelectorAll('details[open]')];
     document.addEventListener('click', e => {
-      const menu = bar.querySelector('.account');
-      if (menu.open && !menu.contains(e.target)) menu.open = false;
+      openMenus().filter(m => !m.contains(e.target)).forEach(m => { m.open = false; });
     });
-    // Keep the current page's tab in view on narrow screens, where the nav scrolls sideways.
-    bar.querySelector('.nav a.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      openMenus().forEach(m => { m.open = false; m.querySelector('summary').focus(); });
+    });
+    // Coming back with the browser's back button shouldn't find a menu still open.
+    window.addEventListener('pageshow', () => openMenus().forEach(m => { m.open = false; }));
     refreshAccount();
   }
 
