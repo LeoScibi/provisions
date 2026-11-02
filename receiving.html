@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Goods in</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=44">
+<link rel="icon" type="image/png" href="img/favicon.png">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<main>
+  <h2>Goods in</h2>
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="receivingCard" style="display:none;">
+    <div id="out"></div>
+    <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=9"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/supplier-products.js?v=1"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/receive.js?v=1"></script>
+<script>
+  // Checking a delivery in, on a phone, in the fridge: one card per line, each
+  // ticked off in turn, then one confirm that records the lot. The signal in
+  // there can't be relied on, so nothing here touches the network until that
+  // confirm, and what's typed stays on the phone (see saveDraft) until it works.
+  let token = null;
+  let data = null;      // everything read from the sheet
+  let session = null;   // the PO being checked: { po, lines, open }
+  let view = 'list';    // list | check | review | done
+  let result = null;    // what the last confirm did, for the done view
+  const warned = {};    // line index -> the odd-looking qty already warned about
+
+  const out = document.getElementById('out');
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('receivingCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+  function toObjects(rows) {
+    if (!rows.length) return [];
+    const [head, ...rest] = rows;
+    return rest.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+  }
+  const fmtDateShort = iso => {
+    if (!iso) return '';
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+  const daysFromToday = iso => Math.round((new Date(iso + 'T00:00:00') - new Date(receiveDate() + 'T00:00:00')) / 86400000);
+  const parseQty = text => {
+    const n = parseFloat(String(text).replace(',', '.'));
+    return isNaN(n) ? 0 : Math.round(n * 1000) / 1000;
+  };
+  const productOf = code => data.productByCode[code];
+  const nameOf = code => productOf(code)?.['Product name'] || code;
+
+  // ---- loading ----
+
+  async function loadAll() {
+    if (!requireAuth()) return;
+    const cfg = getStoredConfig();
+    setStatus('Loading...');
+    try {
+      const groupsP = loadProductGroups(cfg.spreadsheetId);
+      const [productRows, poRows, polRows, allocRows, lineRows, orderRows, links] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
+        loadRequiredTab(cfg.spreadsheetId, 'PurchaseOrders'),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token),
+        loadRequiredTab(cfg.spreadsheetId, 'Allocations'),
+        loadRequiredTab(cfg.spreadsheetId, 'OrderLines'),
+        loadRequiredTab(cfg.spreadsheetId, 'Orders'),
+        loadSupplierProducts(cfg.spreadsheetId)
+      ]);
+      const products = toObjects(productRows);
+      registerProducts(products);
+      registerProductGroups(await groupsP);
+      data = {
+        products, links,
+        productByCode: Object.fromEntries(products.map(p => [p['Product code'], p])),
+        pos: poRows.rows.map(r => r.obj),
+        lines: toObjects(polRows),
+        allocs: allocRows.rows, orderLines: lineRows.rows, orders: orderRows.rows
+      };
+      setStatus('');
+      route();
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  function route() {
+    const poId = new URLSearchParams(location.search).get('po');
+    const po = poId ? data.pos.find(p => p.ID === poId) : null;
+    if (po && po.STATUS === 'Ordered') { startCheck(po); return; }
+    if (poId) setStatus(po ? `${poId} is already ${po.STATUS.toLowerCase()}.` : `${poId} isn't in the sheet.`, 'error');
+    view = 'list';
+    render();
+  }
+
+  // ---- what's typed stays on the phone until it's confirmed ----
+
+  const draftKey = poId => `provisions_receive_${poId}`;
+  function readDraft(poId) {
+    try { return JSON.parse(localStorage.getItem(draftKey(poId)) || 'null'); } catch (err) { return null; }
+  }
+  function saveDraft() {
+    try { localStorage.setItem(draftKey(session.po.ID), JSON.stringify(session.lines)); } catch (err) { /* private window: it just won't survive a reload */ }
+  }
+  function clearDraft(poId) {
+    try { localStorage.removeItem(draftKey(poId)); } catch (err) { /* nothing to clear */ }
+  }
+
+  function linesOfPo(poId) {
+    return data.lines.filter(l => l['PO ID'] === poId).map(l => ({
+      lineId: l.ID, code: l['PRODUCT CODE'], unit: l.UNIT || 'kg', ordered: parseQty(l['QTY ORDERED']),
+      isNew: false, checked: false, missing: false,
+      lots: [{ qty: l['QTY ORDERED'] || '', lot: '', bbe: '' }]
+    }));
+  }
+
+  function startCheck(po) {
+    const fresh = linesOfPo(po.ID);
+    const draft = readDraft(po.ID) || [];
+    const lines = fresh.map(l => draft.find(d => d.lineId === l.lineId) || l).concat(draft.filter(d => d.isNew));
+    session = { po, lines, open: lines.findIndex(l => !l.checked) };
+    view = 'check';
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function openPo(poId) {
+    history.pushState({}, '', `receiving.html?po=${encodeURIComponent(poId)}`);
+    route();
+  }
+  function backToList() {
+    history.pushState({}, '', 'receiving.html');
+    session = null;
+    view = 'list';
+    setStatus('');
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  // ---- list of what's due ----
+
+  function dueTag(po) {
+    const start = po['EXPECTED START DATE'], end = po['EXPECTED END DATE'] || start;
+    if (!start) return '';
+    if (daysFromToday(end) < 0) return '<span class="tag t-crit">Overdue</span>';
+    if (daysFromToday(start) <= 0) return '<span class="tag t-ok">Due now</span>';
+    return `<span class="tag t-chill">In ${daysFromToday(start)} day${daysFromToday(start) === 1 ? '' : 's'}</span>`;
+  }
+
+  function listHtml() {
+    const open = data.pos.filter(p => p.STATUS === 'Ordered')
+      .sort((a, b) => (a['EXPECTED START DATE'] || '9999').localeCompare(b['EXPECTED START DATE'] || '9999'));
+    if (!open.length) return '<div class="empty" style="padding:24px;">No deliveries waiting. Purchase orders appear here once they\'re placed.</div>';
+    return open.map(po => {
+      const lines = data.lines.filter(l => l['PO ID'] === po.ID);
+      const draft = readDraft(po.ID);
+      const started = draft ? draft.filter(l => l.checked).length : 0;
+      const range = po['EXPECTED END DATE'] && po['EXPECTED END DATE'] !== po['EXPECTED START DATE']
+        ? `${fmtDateShort(po['EXPECTED START DATE'])}–${fmtDateShort(po['EXPECTED END DATE'])}` : fmtDateShort(po['EXPECTED START DATE']);
+      return `
+        <button type="button" class="panel gi-po" data-open="${escapeHtml(po.ID)}">
+          <span class="gi-po-main">
+            <strong>${escapeHtml(po.SUPPLIER)}</strong>
+            <span class="muted"><span class="code">${escapeHtml(po.ID)}</span> · ${lines.length} item${lines.length === 1 ? '' : 's'}${range ? ' · ' + escapeHtml(range) : ''}</span>
+            ${started ? `<span class="gi-started">Started: ${started} checked on this phone</span>` : ''}
+          </span>
+          ${dueTag(po)}
+        </button>`;
+    }).join('');
+  }
+
+  // ---- checking one PO ----
+
+  // How the delivery will look when it's counted: "2 cases of 12", "2 × 2.3kg".
+  function packHint(line) {
+    const p = productOf(line.code);
+    if (!p || !line.ordered) return '';
+    const perCase = parseFloat(p['Units per case']) || 0;
+    const nominal = parseFloat(p['Nominal weight (kg)']) || 0;
+    if (p['Ordering unit'] === 'Case' && perCase > 0) {
+      const size = line.unit === 'kg' ? perCase * (nominal || 1) : perCase;
+      const cases = Math.round((line.ordered / size) * 1000) / 1000;
+      return line.unit === 'kg' && perCase === 1 ? `${cases} × ${nominal}kg` : `${cases} case${cases === 1 ? '' : 's'} of ${perCase}`;
+    }
+    if (line.unit === 'kg' && nominal) {
+      const units = Math.round((line.ordered / nominal) * 10) / 10;
+      return `about ${units} × ${nominal}kg`;
+    }
+    return '';
+  }
+
+  function reservedOn(line) {
+    return line.lineId ? data.allocs.filter(a => a.obj['PO LINE ID'] === line.lineId)
+      .reduce((s, a) => s + (parseFloat(a.obj['QTY ALLOCATED']) || 0), 0) : 0;
+  }
+
+  function bbeNote(bbe) {
+    if (!bbe) return '';
+    const left = daysFromToday(bbe);
+    if (left < 0) return 'This best-before date has already passed.';
+    if (left < SHORT_DATED_DAYS) return `Short-dated: only ${left} day${left === 1 ? '' : 's'} left.`;
+    return '';
+  }
+
+  function lineSummary(line) {
+    if (line.missing) return 'Not delivered';
+    return receivedLots(line).map(l => escapeHtml(`${qtyUnit(parseQty(l.qty), line.unit)} · ${l.lot} · BB ${fmtDateShort(l.bbe)}`)).join('<br>');
+  }
+
+  function lotHtml(line, li, lot, lj) {
+    const note = bbeNote(lot.bbe);
+    return `
+      <div class="gi-lot" data-lj="${lj}">
+        ${line.lots.length > 1 ? `<div class="gi-lot-h">Lot ${lj + 1}<button type="button" class="btn ghost sm" data-remove-lot="${li}:${lj}">Remove</button></div>` : ''}
+        <label class="gi-f gi-qty">Quantity received
+          <span class="cp-input"><input type="text" inputmode="decimal" autocomplete="off" data-f="qty" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.qty)}"><span class="cp-unit">${escapeHtml(unitLabel(line.unit))}</span></span>
+        </label>
+        <label class="gi-f">Lot number
+          <input type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" data-f="lot" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.lot)}" placeholder="From the label">
+        </label>
+        <label class="gi-f">Best before
+          <input type="date" data-f="bbe" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.bbe)}">
+        </label>
+        <div class="cp-warn" data-bbe-note="${li}:${lj}"${note ? '' : ' hidden'}>${escapeHtml(note)}</div>
+      </div>`;
+  }
+
+  function lineHtml(line, li) {
+    const p = productOf(line.code);
+    const hint = packHint(line);
+    const reserved = reservedOn(line);
+    const head = `
+      ${productThumb(p, 'xs')}
+      <span class="cut-title">
+        <strong>${escapeHtml(nameOf(line.code))}</strong>
+        <span class="muted">${line.isNew ? 'Extra, not on the order' : `Ordered ${escapeHtml(qtyUnit(line.ordered, line.unit))}${hint ? ' · ' + escapeHtml(hint) : ''}`}</span>
+      </span>`;
+    if (session.open !== li) {
+      return `
+        <button type="button" class="panel gi-line gi-closed${line.checked ? ' done' : ''}" data-edit="${li}">
+          ${head}
+          ${line.checked ? `<span class="gi-sum${line.missing ? ' neg' : ''}">${line.missing ? '' : '<span class="cp-tick" aria-hidden="true">✓</span> '}${lineSummary(line)}</span>` : ''}
+        </button>`;
+    }
+    return `
+      <section class="panel gi-line gi-open" data-line="${li}">
+        <div class="gi-open-h">${head}</div>
+        ${reserved > 0 ? `<div class="gi-reserved">${escapeHtml(qtyUnit(reserved, line.unit))} of this is already promised to orders.</div>` : ''}
+        ${line.lots.map((lot, lj) => lotHtml(line, li, lot, lj)).join('')}
+        <div class="cp-warn" data-warn="${li}" hidden></div>
+        <button type="button" class="btn gi-next" data-next="${li}">${session.lines.some((l, i) => i !== li && !l.checked) ? 'Checked, next item' : 'Checked'}</button>
+        <div class="gi-actions">
+          <button type="button" class="btn ghost sm" data-add-lot="${li}">+ Another lot</button>
+          ${line.isNew ? `<button type="button" class="btn ghost sm" data-remove-line="${li}">Remove item</button>`
+            : `<button type="button" class="btn ghost sm" data-missing="${li}">Didn't arrive</button>`}
+        </div>
+      </section>`;
+  }
+
+  function extrasHtml() {
+    const taken = new Set(session.lines.map(l => l.code));
+    const offer = productsForSupplier(data.products, data.links, session.po.SUPPLIER).map(e => e.product)
+      .filter(p => !taken.has(p['Product code']));
+    if (!offer.length) return '';
+    return `
+      <label class="gi-f gi-extra">Something else came that wasn't ordered?
+        <select id="extraProduct">
+          <option value="">Add an item…</option>
+          ${offer.map(p => `<option value="${escapeHtml(p['Product code'])}">${escapeHtml(p['Product name'])}</option>`).join('')}
+        </select>
+      </label>`;
+  }
+
+  function checkHtml() {
+    const lines = session.lines;
+    const done = lines.filter(l => l.checked).length;
+    const ready = lines.length > 0 && done === lines.length;
+    return `
+      <div class="gi-toolbar">
+        <button type="button" class="btn ghost sm" data-back>&larr; Deliveries</button>
+        <button type="button" class="btn ghost sm" data-restart>Start again</button>
+      </div>
+      <div class="cut-progress" role="status">
+        <strong>${escapeHtml(session.po.SUPPLIER)}</strong> <span class="muted">· <span class="code">${escapeHtml(session.po.ID)}</span></span>
+        <div style="margin-top:4px;">${done} of ${lines.length} checked</div>
+        <div class="cut-bar"><span style="width:${lines.length ? (done / lines.length) * 100 : 0}%"></span></div>
+      </div>
+      ${lines.map(lineHtml).join('')}
+      ${extrasHtml()}
+      <div class="gi-bar">
+        <button type="button" class="btn gi-next" data-review${ready ? '' : ' disabled'}>${ready ? 'Review delivery' : `${lines.length - done} still to check`}</button>
+      </div>`;
+  }
+
+  // ---- review and confirm ----
+
+  // The lines as receive.js wants them, quantities tidied.
+  function linesToSave() {
+    return session.lines.map(l => ({
+      lineId: l.lineId, code: l.code, unit: l.unit, isNew: l.isNew,
+      lots: l.missing ? [] : l.lots.map(x => ({ qty: parseQty(x.qty), lot: x.lot, bbe: x.bbe }))
+    }));
+  }
+
+  function reviewHtml() {
+    const lines = linesToSave();
+    const poLineIds = new Set(data.lines.filter(l => l['PO ID'] === session.po.ID).map(l => l.ID));
+    const plan = planReservations(data.allocs, data.orderLines, data.orders, poLineIds, receivedByLineOf(lines));
+    const rows = session.lines.map(l => {
+      const got = l.missing ? 0 : l.lots.reduce((s, x) => s + parseQty(x.qty), 0);
+      const diff = l.isNew ? '' : got < l.ordered - 0.0001 ? `${qtyUnit(Math.round((l.ordered - got) * 1000) / 1000, l.unit)} short`
+        : got > l.ordered + 0.0001 ? `${qtyUnit(Math.round((got - l.ordered) * 1000) / 1000, l.unit)} over` : '';
+      return `
+        <div class="gi-rev">
+          <div class="cp-name">${escapeHtml(nameOf(l.code))}${l.isNew ? ' <span class="tag t-chill">Extra</span>' : ''}</div>
+          <div class="gi-sum${l.missing ? ' neg' : ''}">${lineSummary(l)}</div>
+          ${diff ? `<div class="gi-diff">${escapeHtml(diff)}</div>` : ''}
+        </div>`;
+    }).join('');
+    return `
+      <div class="gi-toolbar"><button type="button" class="btn ghost sm" data-keep-checking>&larr; Keep checking</button></div>
+      <section class="panel gi-review">
+        <div class="cut-head"><span class="cut-title"><strong>${escapeHtml(session.po.SUPPLIER)}</strong><span class="muted"><span class="code">${escapeHtml(session.po.ID)}</span></span></span></div>
+        ${rows}
+      </section>
+      ${plan.short.length ? `<div class="cp-warn gi-short">This won't cover what's promised to ${escapeHtml(plan.short.join(', '))}. ${plan.short.length === 1 ? 'It goes' : 'They go'} back to New and will need re-allocating or replacing.</div>` : ''}
+      <div class="gi-bar"><button type="button" class="btn gi-next" id="confirmBtn">Confirm delivery</button></div>`;
+  }
+
+  function doneHtml() {
+    const { poId, supplier, filled, short, already } = result;
+    return `
+      <section class="panel gi-done">
+        <div class="gi-done-tick" aria-hidden="true">✓</div>
+        <strong>${escapeHtml(supplier)}${already ? `: already ${escapeHtml(already.toLowerCase())}` : ' checked in'}</strong>
+        <div class="muted"><span class="code">${escapeHtml(poId)}</span>${already ? ' · nothing more was saved' : filled ? ` · ${filled} order allocation${filled === 1 ? '' : 's'} filled from it` : ''}</div>
+        ${short?.length ? `<div class="cp-warn" style="margin-top:12px; text-align:left;">Not enough arrived for ${short.map(id => `<a href="orders.html?open=${encodeURIComponent(id)}" style="color:inherit; text-decoration:underline;">${escapeHtml(id)}</a>`).join(', ')}. Re-allocate or replace those lines.</div>` : ''}
+      </section>
+      <div class="gi-bar"><button type="button" class="btn gi-next" data-back>Back to deliveries</button></div>`;
+  }
+
+  function render() {
+    out.innerHTML = view === 'check' ? checkHtml() : view === 'review' ? reviewHtml() : view === 'done' ? doneHtml() : listHtml();
+  }
+
+  function showWarn(li, msg) {
+    const el = out.querySelector(`[data-warn="${li}"]`);
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = !msg;
+  }
+
+  // Moves on from a line, once its lots are complete. A quantity a long way
+  // from the order (872 for 8.72) needs a second tap, as a weight does on the
+  // cutting screen.
+  function checkLine(li) {
+    const line = session.lines[li];
+    const filled = line.lots.filter(l => parseQty(l.qty) > 0 || (l.lot || '').trim() || l.bbe);
+    if (!line.lots.some(l => parseQty(l.qty) > 0)) { showWarn(li, 'Enter the quantity, or tap "Didn\'t arrive".'); return; }
+    for (const l of filled) {
+      if (parseQty(l.qty) <= 0) { showWarn(li, 'Enter a quantity for every lot, or remove the lot.'); return; }
+      if (!(l.lot || '').trim()) { showWarn(li, 'Enter the lot number from the label.'); return; }
+      if (!l.bbe) { showWarn(li, 'Enter the best-before date from the label.'); return; }
+    }
+    const total = Math.round(line.lots.reduce((s, l) => s + parseQty(l.qty), 0) * 1000) / 1000;
+    if (line.ordered && Math.abs(total - line.ordered) / line.ordered > 0.25 && warned[li] !== total) {
+      warned[li] = total;
+      showWarn(li, `${qtyUnit(total, line.unit)} is a long way from the ${qtyUnit(line.ordered, line.unit)} ordered. Tap again if that's right.`);
+      return;
+    }
+    line.lots = line.lots.filter(l => parseQty(l.qty) > 0).map(l => ({ ...l, qty: parseQty(l.qty) }));
+    line.checked = true;
+    line.missing = false;
+    moveOn(li);
+  }
+
+  function moveOn(li) {
+    const lines = session.lines;
+    const after = lines.findIndex((l, i) => i > li && !l.checked);
+    session.open = after >= 0 ? after : lines.findIndex(l => !l.checked);
+    saveDraft();
+    render();
+    const target = session.open >= 0 ? out.querySelector(`[data-line="${session.open}"]`) : out.querySelector('[data-review]');
+    target?.scrollIntoView({ block: 'center' });
+  }
+
+  async function confirmDelivery() {
+    const lines = linesToSave();
+    const problem = receiveProblem(lines, nameOf);
+    if (problem) { setStatus(problem, 'error'); return; }
+    const btn = document.getElementById('confirmBtn');
+    btn.disabled = true;
+    setStatus('Saving...');
+    const { ID: poId, SUPPLIER: supplier } = session.po;
+    try {
+      const res = await receivePurchaseOrder(getStoredConfig().spreadsheetId, poId, lines);
+      clearDraft(poId);
+      result = { poId, supplier, ...res };
+      history.replaceState({}, '', 'receiving.html');
+      session = null;
+      view = 'done';
+      setStatus('');
+      await refresh();
+      render();
+      window.scrollTo(0, 0);
+    } catch (err) {
+      btn.disabled = false;
+      setStatus(`Not saved (${err.message}). What you've entered is safe on this phone. Move somewhere with signal and tap Confirm delivery again.`, 'error');
+    }
+  }
+
+  // Re-reads what the list shows. A failure here doesn't matter: it's saved.
+  async function refresh() {
+    const cfg = getStoredConfig();
+    try {
+      const [pos, lines, allocs, orderLines, orders] = await Promise.all([
+        loadRequiredTab(cfg.spreadsheetId, 'PurchaseOrders'),
+        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token),
+        loadRequiredTab(cfg.spreadsheetId, 'Allocations'),
+        loadRequiredTab(cfg.spreadsheetId, 'OrderLines'),
+        loadRequiredTab(cfg.spreadsheetId, 'Orders')
+      ]);
+      Object.assign(data, { pos: pos.rows.map(r => r.obj), lines: toObjects(lines), allocs: allocs.rows, orderLines: orderLines.rows, orders: orders.rows });
+    } catch (err) {
+      data.pos.find(p => p.ID === result.poId).STATUS = 'Delivered';
+    }
+  }
+
+  // ---- wiring ----
+
+  out.addEventListener('click', (e) => {
+    const t = e.target;
+    const openBtn = t.closest('[data-open]');
+    if (openBtn) { openPo(openBtn.dataset.open); return; }
+    if (t.closest('[data-back]')) { backToList(); return; }
+    if (t.closest('[data-restart]')) {
+      if (!confirm('Clear everything typed for this delivery and start again?')) return;
+      clearDraft(session.po.ID);
+      startCheck(session.po);
+      return;
+    }
+    const edit = t.closest('[data-edit]');
+    if (edit) {
+      const li = parseInt(edit.dataset.edit, 10);
+      const line = session.lines[li];
+      if (line.missing) { line.missing = false; line.lots = [{ qty: line.ordered || '', lot: '', bbe: '' }]; }
+      line.checked = false;
+      session.open = li;
+      saveDraft();
+      render();
+      out.querySelector(`[data-line="${li}"]`)?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    const next = t.closest('[data-next]');
+    if (next) { checkLine(parseInt(next.dataset.next, 10)); return; }
+    const addLot = t.closest('[data-add-lot]');
+    if (addLot) {
+      const line = session.lines[parseInt(addLot.dataset.addLot, 10)];
+      line.lots.push({ qty: '', lot: '', bbe: '' });
+      saveDraft();
+      render();
+      return;
+    }
+    const rmLot = t.closest('[data-remove-lot]');
+    if (rmLot) {
+      const [li, lj] = rmLot.dataset.removeLot.split(':').map(n => parseInt(n, 10));
+      session.lines[li].lots.splice(lj, 1);
+      saveDraft();
+      render();
+      return;
+    }
+    const missing = t.closest('[data-missing]');
+    if (missing) {
+      const li = parseInt(missing.dataset.missing, 10);
+      Object.assign(session.lines[li], { missing: true, checked: true });
+      moveOn(li);
+      return;
+    }
+    const rmLine = t.closest('[data-remove-line]');
+    if (rmLine) {
+      session.lines.splice(parseInt(rmLine.dataset.removeLine, 10), 1);
+      session.open = session.lines.findIndex(l => !l.checked);
+      saveDraft();
+      render();
+      return;
+    }
+    if (t.closest('[data-review]') && !t.closest('[data-review]').disabled) {
+      view = 'review';
+      setStatus('');
+      render();
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (t.closest('[data-keep-checking]')) { view = 'check'; setStatus(''); render(); return; }
+    if (t.closest('#confirmBtn')) confirmDelivery();
+  });
+
+  // Typing changes only the draft, never the page, so the keyboard stays put.
+  const syncField = (e) => {
+    const f = e.target.dataset.f;
+    if (!f) return;
+    const li = parseInt(e.target.dataset.li, 10), lj = parseInt(e.target.dataset.lj, 10);
+    session.lines[li].lots[lj][f] = e.target.value;
+    showWarn(li, '');
+    if (f === 'bbe') {
+      const note = out.querySelector(`[data-bbe-note="${li}:${lj}"]`);
+      const msg = bbeNote(e.target.value);
+      note.textContent = msg;
+      note.hidden = !msg;
+    }
+    saveDraft();
+  };
+  out.addEventListener('input', syncField);
+  out.addEventListener('change', (e) => {
+    syncField(e);
+    if (e.target.id !== 'extraProduct' || !e.target.value) return;
+    const code = e.target.value, p = productOf(code);
+    session.lines.push({
+      lineId: null, code, unit: p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc', ordered: 0,
+      isNew: true, checked: false, missing: false, lots: [{ qty: '', lot: '', bbe: '' }]
+    });
+    session.open = session.lines.length - 1;
+    saveDraft();
+    render();
+    out.querySelector(`[data-line="${session.open}"]`)?.scrollIntoView({ block: 'center' });
+  });
+
+  window.addEventListener('popstate', () => { if (data) { setStatus(''); route(); } });
+  window.addEventListener('load', loadAll);
+</script>
+</body>
+</html>

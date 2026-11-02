@@ -80,9 +80,14 @@ models, sheet schemas, or conventions between the two.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
   delivery date range. Status: Ordered → Delivered/Cancelled — delivery is
-  one-time, not partial. "Mark as delivered" (in `purchase-orders.html`) is
-  the only normal path onto the Deliveries tab: it appends the resulting
-  rows there and fills in each line's received qty/lot/best-before.
+  one-time, not partial. "Mark as delivered" (the dialog in
+  `purchase-orders.html`, or `receiving.html` on a phone) is the only normal
+  path onto the Deliveries tab: it appends the resulting rows there and fills
+  in each line's received qty/lot/best-before. Both call
+  `receivePurchaseOrder()` in `js/receive.js`, one all-or-nothing
+  `spreadsheets.batchUpdate` that re-reads the PO first and writes nothing if
+  it's no longer Ordered. `receiving.html` keeps typed entries in localStorage
+  until the confirm succeeds, because signal in the fridge can't be relied on.
 - **Stock on hand** is never stored: it's each Deliveries batch's received
   qty minus its Allocations. `computeStockByProduct()` in `js/stock-calc.js`
   is the shared version (Products' cards use it); `computeStockPosition()`
@@ -118,7 +123,7 @@ models, sheet schemas, or conventions between the two.
   Allocations row with `PO LINE ID` set and no lot ("Reserved · PO295" on the
   line, "Awaiting PO295" on slips). Reservations count as allocated but not as
   shelf stock (`computeStockPosition` shows only unreserved incoming). At
-  goods-in `resolveReservations()` in `purchase-orders.html` turns them into
+  goods-in `planReservations()` in `js/receive.js` turns them into
   real lot allocations, first placed first served; what a short delivery or a
   cancelled PO can't cover is released and the order drops back to New. New Order picks a
   delivery *week*; the date saved is the customer's usual day in it
@@ -179,6 +184,7 @@ transport.html               Hauliers bringing goods in, with contacts
 purchase-orders.html           Place/receive supplier orders
 stock.html                       Stock view
 stock-take.html                    Physical count vs. system quantity
+receiving.html                       Check a delivery in, line by line (phone-first)
 orders.html                          Place orders, allocate stock
 cutting.html                         Weigh each cut piece, record waste (phone-first)
 trace.html                           One lot: delivery, customers, weights, waste

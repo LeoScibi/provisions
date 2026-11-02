@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=43">
+<link rel="stylesheet" href="css/style.css?v=44">
 <link rel="icon" type="image/png" href="img/favicon.png">
 </head>
 <body>
@@ -44,7 +44,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=8"></script>
+<script src="js/shell.js?v=9"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=4"></script>
 <script src="js/product-ui.js?v=4"></script>
@@ -52,6 +52,8 @@
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/daterange.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/receive.js?v=1"></script>
 <script>
   let token = null;
   let suppliers = [];
@@ -614,7 +616,12 @@
       if (e.target.closest('[data-cancel]')) { guard.guardedClose(); return; }
       if (e.target.closest('#poCopyBtn')) { copyPoToClipboard(lines); return; }
       if (e.target.closest('#poCancelBtn')) { handleCancelPo(po); return; }
-      if (e.target.closest('#poReceiveBtn')) { renderReceiveForm(po, lines); guard.arm(); }
+      if (e.target.closest('#poReceiveBtn')) {
+        // On a phone the table below doesn't fit: use the goods-in screen.
+        if (window.matchMedia('(max-width:640px)').matches) { window.top.location.href = `receiving.html?po=${encodeURIComponent(po.obj.ID)}`; return; }
+        renderReceiveForm(po, lines);
+        guard.arm();
+      }
     };
   }
 
@@ -628,71 +635,15 @@
     }
   }
 
-  // ---- reservations: order lines holding stock still arriving on this PO ----
-  //
-  // An order line short of shelf stock can reserve a quantity on an open PO
-  // line (an Allocations row with PO LINE ID and no lot — see orders.html).
-  // When the PO is received, each reservation becomes real allocations from
-  // the lots just entered, first placed, first served (order date, then
-  // order ID); whatever a short or missing delivery can't cover is released
-  // and that order drops back from Allocated to New, to be replaced or
-  // re-allocated. Cancelling the PO releases them all (receivedByLine = {}).
-  // receivedByLine: { [poLineId]: [{ lot, bbe, qty }] }. Returns
-  // { filled: rows converted, short: order IDs left short }.
-  async function resolveReservations(cfg, po, receivedByLine) {
-    const [allocRaw, lineRaw, orderRaw] = await Promise.all([
-      sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
-      sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
-      sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token)
-    ]);
-    const poLineIds = new Set(polRowsData.filter(l => l.obj['PO ID'] === po.obj.ID).map(l => l.obj.ID));
-    const reservations = toRowObjects(allocRaw).filter(a => poLineIds.has(a.obj['PO LINE ID']));
-    if (!reservations.length) return { filled: 0, short: [] };
-    const orderOfLine = Object.fromEntries(toRowObjects(lineRaw).map(l => [l.obj.ID, l.obj['ORDER ID']]));
-    const orders = toRowObjects(orderRaw);
-    const orderById = Object.fromEntries(orders.map(o => [o.obj.ID, o.obj]));
-    const num = id => parseInt(String(id).replace(/\D/g, ''), 10) || 0;
-    const orderOf = a => orderById[orderOfLine[a.obj['ORDER LINE ID']]] || {};
-    reservations.sort((a, b) => (orderOf(a).DATE || '9999').localeCompare(orderOf(b).DATE || '9999')
-      || num(orderOf(a).ID) - num(orderOf(b).ID) || num(a.obj.ID) - num(b.obj.ID));
-
-    const pools = {};
-    Object.entries(receivedByLine).forEach(([id, lots]) => {
-      pools[id] = lots.map(x => ({ ...x, remaining: x.qty })).sort((a, b) => (a.bbe || '9999').localeCompare(b.bbe || '9999'));
-    });
-    const newRows = [], short = new Set();
-    let base = allocRaw.length ? allocRaw : [['ID']];
-    reservations.forEach(a => {
-      let left = parseFloat(a.obj['QTY ALLOCATED']) || 0;
-      (pools[a.obj['PO LINE ID']] || []).forEach(lot => {
-        if (left <= 0.0001 || lot.remaining <= 0.0001) return;
-        const take = Math.round(Math.min(left, lot.remaining) * 1000) / 1000;
-        lot.remaining -= take;
-        left = Math.round((left - take) * 1000) / 1000;
-        const id = nextId(base, 'ALO');
-        base = base.concat([[id]]);
-        newRows.push([id, a.obj['ORDER LINE ID'], a.obj['PRODUCT CODE'], lot.lot, take, todayIso(), '', '']);
-      });
-      if (left > 0.0001) short.add(orderOfLine[a.obj['ORDER LINE ID']]);
-    });
-
-    await sheetsDeleteRows(cfg.spreadsheetId, 'Allocations', reservations.map(a => a.rowNumber));
-    if (newRows.length) await sheetsAppendRows(cfg.spreadsheetId, 'Allocations!A:H', newRows, token);
-    const statusCol = colLetter((orderRaw[0] || []).indexOf('STATUS') + 1);
-    const back = orders.filter(o => short.has(o.obj.ID) && o.obj.STATUS === 'Allocated');
-    if (back.length) await sheetsBatchUpdateValues(cfg.spreadsheetId, back.map(o => ({ range: `Orders!${statusCol}${o.rowNumber}`, values: [['New']] })), token);
-    return { filled: newRows.length, short: [...short] };
-  }
-
   async function handleCancelPo(po) {
     if (!confirm(`Cancel purchase order ${po.obj.ID}? This can't be undone. Any order lines reserved on it are released.`)) return;
     const cfg = await ensureAuth(setDlgStatus);
     if (!cfg) return;
     try {
-      await sheetsUpdateRange(cfg.spreadsheetId, `PurchaseOrders!F${po.rowNumber}:F${po.rowNumber}`, [['Cancelled']], token, 'USER_ENTERED');
-      const { short } = await resolveReservations(cfg, po, {});
+      const { already, short } = await cancelPurchaseOrder(cfg.spreadsheetId, po.obj.ID);
       dialogEl.close();
       await loadAll();
+      if (already) { setStatus(`${po.obj.ID} is already ${already.toLowerCase()}, so nothing was changed.`, 'error'); return; }
       setStatus(short.length ? `${po.obj.ID} cancelled — reservations released on ${short.join(', ')}: re-allocate or replace those lines.` : `${po.obj.ID} cancelled.`, short.length ? 'error' : 'ok');
     } catch (err) {
       setDlgStatus('Error: ' + err.message, 'error');
@@ -820,62 +771,15 @@
     const cfg = await ensureAuth(setDlgStatus);
     if (!cfg) return;
 
-    const toReceive = [];
-    for (const l of receiveLines) {
-      for (const lot of l.lots) {
-        if (parseFloat(lot.qty) > 0) toReceive.push({ code: l.code, name: l.name, unit: l.unit, qty: lot.qty, lot: lot.lot, bbe: lot.bbe });
-      }
-    }
-    for (const l of toReceive) {
-      if (!l.lot || !l.lot.trim()) { setDlgStatus(`Enter a lot number for ${l.name}.`, 'error'); return; }
-      if (!l.bbe) { setDlgStatus(`Enter a best-before date for ${l.name}.`, 'error'); return; }
-    }
+    const problem = receiveProblem(receiveLines, productName);
+    if (problem) { setDlgStatus(problem, 'error'); return; }
 
     setDlgStatus('Recording delivery...');
     try {
-      if (toReceive.length) {
-        const existingDel = await sheetsGet(cfg.spreadsheetId, 'Deliveries!A:A', token);
-        let delBase = existingDel.length ? existingDel : [['ID']];
-        const deliveryRows = toReceive.map(l => {
-          const id = nextId(delBase, 'DEL');
-          delBase = delBase.concat([[id]]);
-          return [id, todayIso(), po.obj.SUPPLIER, l.code, l.lot.trim(), l.bbe, parseFloat(l.qty), l.unit, '', po.obj.ID];
-        });
-        await sheetsAppendRows(cfg.spreadsheetId, 'Deliveries!A:J', deliveryRows, token);
-      }
-
-      const existingLines = await sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:A', token);
-      let polBase = existingLines.length ? existingLines : [['ID']];
-      const newLineRows = [];
-      for (const l of receiveLines) {
-        const receivedLots = l.lots.filter(lot => parseFloat(lot.qty) > 0);
-        const totalQty = receivedLots.reduce((sum, lot) => sum + parseFloat(lot.qty), 0);
-        const delivered = totalQty > 0;
-        const status = delivered ? 'Delivered' : 'Not delivered';
-        const lotNumbers = receivedLots.map(lot => lot.lot.trim()).join(', ');
-        const bbeDates = receivedLots.map(lot => lot.bbe).join(', ');
-        if (l.isNew) {
-          const id = nextId(polBase, 'POL');
-          polBase = polBase.concat([[id]]);
-          newLineRows.push([id, po.obj.ID, l.code, '', l.unit, delivered ? totalQty : '', delivered ? lotNumbers : '', delivered ? bbeDates : '', status]);
-        } else {
-          await sheetsUpdateRange(cfg.spreadsheetId, `PurchaseOrderLines!F${l.rowNumber}:I${l.rowNumber}`, [[delivered ? totalQty : '', delivered ? lotNumbers : '', delivered ? bbeDates : '', status]], token, 'USER_ENTERED');
-        }
-      }
-      if (newLineRows.length) await sheetsAppendRows(cfg.spreadsheetId, 'PurchaseOrderLines!A:I', newLineRows, token);
-
-      await sheetsUpdateRange(cfg.spreadsheetId, `PurchaseOrders!F${po.rowNumber}:F${po.rowNumber}`, [['Delivered']], token, 'USER_ENTERED');
-
-      // Orders holding stock on this PO now get the real lots.
-      const receivedByLine = {};
-      receiveLines.filter(l => !l.isNew && l.lineId).forEach(l => {
-        receivedByLine[l.lineId] = l.lots.filter(lot => parseFloat(lot.qty) > 0)
-          .map(lot => ({ lot: lot.lot.trim(), bbe: lot.bbe, qty: parseFloat(lot.qty) }));
-      });
-      const { filled, short } = await resolveReservations(cfg, po, receivedByLine);
-
+      const { already, filled, short } = await receivePurchaseOrder(cfg.spreadsheetId, po.obj.ID, receiveLines);
       dialogEl.close();
       await loadAll();
+      if (already) { setStatus(`${po.obj.ID} is already ${already.toLowerCase()}, so nothing was recorded.`, 'error'); return; }
       setStatus(`${po.obj.ID} marked as delivered.`
         + (filled ? ` ${filled} reserved order line allocation(s) filled with the lots received.` : '')
         + (short.length ? ` Not enough arrived for ${short.join(', ')} — those lines need re-allocating or replacing.` : ''), short.length ? 'error' : 'ok');
