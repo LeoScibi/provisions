@@ -172,6 +172,15 @@ models, sheet schemas, or conventions between the two.
   last piece is weighed. Removing a line or order also deletes its Cuts.
   `trace.html?lot=…` (linked from Stock's By batch table) shows a lot's
   delivery, customers, piece weights and waste.
+- **Xero export** (`js/xero-export.js`, the "Export to Xero" button on
+  `lists.html`): the week's orders, by delivery date, as a Xero sales-invoice
+  import CSV — Xero's template headers exactly, one row per line, DD/MM/YYYY,
+  ex-VAT `UnitAmount`, customer `Discount (%)` per line, VAT rate mapped to
+  Xero's tax-rate names (`xeroTaxType()`). An order is only exportable once
+  every piece `weighSource()` says gets weighed has a Cuts row; those lines
+  bill the actual kilos. Price is `List price £`, else the calculated list
+  price. InvoiceNumber = order ID, so Xero skips an order already imported;
+  nothing is written back to the sheet. TEST orders are left out.
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's
   computed on-hand qty into StockTakeLines (`SYSTEM QTY`) with a blank
@@ -201,7 +210,8 @@ orders.html                          Place orders, allocate stock
 cutting.html                         Weigh each cut piece, record waste (phone-first)
 trace.html                           One lot: delivery, customers, weights, waste
 lists.html                             Cutting list, packing slips (truck order, box
-                                       counts), delivery notes, box labels
+                                       counts), delivery notes, box labels,
+                                       weekly Xero invoice export
 reports.html                             Sales / purchases for any period against another:
                                          drill customer → product → deliveries (or the
                                          reverse), best / worst / rising / falling / not

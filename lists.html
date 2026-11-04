@@ -37,6 +37,7 @@
       <button type="button" class="btn ghost sm" id="printPackBtn">Print packing slips</button>
       <button type="button" class="btn ghost sm" id="printNotesBtn">Print delivery notes</button>
       <button type="button" class="btn ghost sm" id="printLabelsBtn">Print box labels</button>
+      <button type="button" class="btn ghost sm" id="xeroBtn">Export to Xero</button>
       <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:Archivo,sans-serif; font-size:13px; color:var(--steel); font-weight:400; letter-spacing:normal;">
         <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
       </label>
@@ -46,12 +47,16 @@
     <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
   </div>
 </main>
+<dialog id="xeroDialog">
+  <form id="xeroForm" method="dialog"></form>
+</dialog>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
 <script src="js/shell.js?v=10"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/cuts.js?v=1"></script>
+<script src="js/xero-export.js?v=1"></script>
 <script>
   let token = null;
   let weekOffset = 0;
@@ -627,6 +632,76 @@
   }
   window.addEventListener('afterprint', () => { delete document.body.dataset.print; });
 
+  // ---- Xero export: this week's orders as draft sales invoices ----
+  //
+  // Every order delivering this week, dispatched or not (dispatched ones are
+  // the ones most likely to need invoicing). TEST-tagged orders from
+  // test-data.html are left out so they can't reach the real books.
+  const isTestOrder = o => /\bTEST\b/.test(o.NOTES || '');
+  let xeroInvoices = [];
+
+  function openXeroExport() {
+    if (!data) return;
+    const { start, end } = weekRange(weekOffset);
+    const startIso = isoDate(start), endIso = isoDate(end);
+    const week = data.orders.filter(o => o['DELIVERY DATE'] >= startIso && o['DELIVERY DATE'] <= endIso);
+    const tests = week.filter(isTestOrder).length;
+    xeroInvoices = week.filter(o => !isTestOrder(o))
+      .map(o => xeroInvoiceFor(o, { lines: data.lines, productByCode: data.productByCode, customerByName: data.customerByName, cutsOfLine: data.cutsOfLine }))
+      .sort((a, b) => b.ready - a.ready || a.order['DELIVERY DATE'].localeCompare(b.order['DELIVERY DATE']) || a.order.CUSTOMER.localeCompare(b.order.CUSTOMER));
+    const ready = xeroInvoices.filter(i => i.ready);
+    const money = n => `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const row = (inv, i) => `
+      <tr${inv.ready ? '' : ' class="none"'}>
+        <td style="width:28px;"><input type="checkbox" data-inv="${i}" style="width:auto;"${inv.ready ? ' checked' : ' disabled'}></td>
+        <td><strong>${escapeHtml(inv.order.CUSTOMER)}</strong><br><span class="code">${escapeHtml(inv.order.ID)} · ${escapeHtml(fmtDateShort(inv.order['DELIVERY DATE']))}</span>
+          ${inv.blockers.map(b => `<div style="color:var(--crit); font-size:12.5px;">${escapeHtml(b)}</div>`).join('')}
+          ${inv.ready ? inv.warnings.map(w => `<div class="muted" style="font-size:12.5px;">${escapeHtml(w)}</div>`).join('') : ''}</td>
+        <td>${inv.ready ? '<span class="tag t-ok">Ready</span>' : '<span class="tag t-crit">Not ready</span>'}</td>
+        <td class="num">${inv.ready ? money(inv.total) : ''}</td>
+      </tr>`;
+    document.getElementById('xeroForm').innerHTML = `
+      <div class="dlg-h">
+        <div>
+          <div class="ttl">Export to Xero</div>
+          <div class="subtitle">${escapeHtml(document.getElementById('weekLabel').textContent)} · ${ready.length} of ${xeroInvoices.length} order(s) ready to invoice</div>
+        </div>
+        <button type="button" class="dlg-close" data-close aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="dlg-b">
+        ${xeroInvoices.length ? `
+          <table>
+            <thead><tr><th></th><th>Order</th><th>Status</th><th class="num">Ex VAT</th></tr></thead>
+            <tbody>${xeroInvoices.map(row).join('')}</tbody>
+          </table>` : '<div class="empty" style="padding:16px;">No orders for delivery this week.</div>'}
+        ${tests ? `<p class="muted" style="font-size:12.5px;">${tests} TEST order(s) left out.</p>` : ''}
+        <div class="note info" style="margin:16px 0 0;">
+          An order is ready once every cheese on it has been cut and weighed — weighed lines are billed on the actual kilos.
+          In Xero: <strong>Sales → Invoices → Import</strong>, choose this file and <strong>Tax exclusive</strong>. Invoices arrive as drafts,
+          numbered by order ID, so an order already imported is skipped if you export the week again.
+        </div>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="button" class="btn" id="xeroDownloadBtn"${ready.length ? '' : ' disabled'}>Download CSV</button>
+      </div>`;
+    const dlg = document.getElementById('xeroDialog');
+    dlg.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
+    const btn = document.getElementById('xeroDownloadBtn');
+    const checked = () => [...dlg.querySelectorAll('input[data-inv]:checked')].map(c => xeroInvoices[+c.dataset.inv]);
+    dlg.querySelectorAll('input[data-inv]').forEach(c => c.addEventListener('change', () => { btn.disabled = !checked().length; }));
+    btn.addEventListener('click', () => {
+      const chosen = checked();
+      if (!chosen.length) return;
+      downloadXeroCsv(chosen, `xero-invoices-${startIso}.csv`);
+      showToast(`${chosen.length} invoice(s) exported for Xero.`);
+      dlg.close();
+    });
+    dlg.showModal();
+  }
+
   function shiftWeek(delta) {
     weekOffset = delta === 0 ? 0 : weekOffset + delta;
     renderWeekLabel();
@@ -642,6 +717,7 @@
   document.getElementById('printPackBtn').addEventListener('click', () => printOnly('pack'));
   document.getElementById('printNotesBtn').addEventListener('click', () => printOnly('notes'));
   document.getElementById('printLabelsBtn').addEventListener('click', () => printOnly('labels'));
+  document.getElementById('xeroBtn').addEventListener('click', openXeroExport);
   window.addEventListener('load', loadLists);
   // An order opened in place (js/shell.js) may have changed lines or
   // allocations — re-read so the lists match.
