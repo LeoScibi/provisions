@@ -14,10 +14,11 @@
 // - invoices land as drafts. UnitAmount here is ex VAT: pick "Tax exclusive"
 //   when Xero asks at import.
 //
-// Each line's description ends with the lots it went out from and their
-// best-before dates, as on the delivery note: the line's Allocations (a cut
-// piece's are its wheel's lots), dated from Deliveries. Reservations on stock
-// still to arrive have no lot yet and are left out.
+// An order line that went out from several lots becomes one invoice line per
+// lot, each ending with its lot and best-before (as on the delivery note):
+// weighed pieces by the wheel lot each was cut from (Cuts), everything else
+// by its Allocations, dated from Deliveries. Anything no lot covers yet
+// (stock still on a purchase order) is one more line with no lot.
 //
 // An order can only be invoiced once every piece that is weighed at the bench
 // (cut portions, and wholes sold by the piece but priced per kg — see
@@ -100,41 +101,64 @@ function xeroInvoiceFor(order, ctx) {
 
     const src = weighSource(l, ctx.productByCode);
     const cuts = ctx.cutsOfLine[l.ID] || [];
-    let qty, description = name;
+    const pcs = n => `${n} pc${n === 1 ? '' : 's'}`;
+    // One invoice line per lot: [{ qty, lot, wheel, note }].
+    let parts;
     if (src) {
       const pieces = linePieces(l, src).count;
       if (cuts.length < pieces) {
         blockers.push(`${name}: ${cuts.length} of ${pieces} piece${pieces === 1 ? '' : 's'} weighed`);
         return;
       }
-      qty = sumCutWeight(cuts);
-      const weights = cuts.map(c => `${cutWeight(c).toFixed(3)}kg`).join(' + ');
-      description = `${name} · ${cuts.length} pc${cuts.length === 1 ? '' : 's'}: ${weights}`;
-    } else if (p['Pricing basis'] === 'Per kg' && l.UNIT !== 'kg') {
-      // Priced per kg, ordered by the piece, never weighed: bill nominal kilos.
-      const kg = xeroNum(p['Nominal weight (kg)']);
-      if (!kg) warnings.push(`${name}: priced per kg but has no nominal weight — billed as ${ordered} pieces`);
-      qty = kg ? ordered * kg : ordered;
-      if (kg) description = `${name} · ${ordered} pc${ordered === 1 ? '' : 's'}`;
+      // Each weighed piece records the wheel lot it came off.
+      const byLot = new Map();
+      cuts.forEach(c => {
+        const lot = c.obj['BATCH/LOT NUMBER'] || '';
+        if (!byLot.has(lot)) byLot.set(lot, []);
+        byLot.get(lot).push(c);
+      });
+      parts = [...byLot].map(([lot, cs]) => ({
+        qty: sumCutWeight(cs), lot, wheel: cs[0].obj['WHEEL CODE'] || src.code,
+        note: `${pcs(cs.length)}: ${cs.map(c => `${cutWeight(c).toFixed(3)}kg`).join(' + ')}`
+      }));
     } else {
-      qty = ordered;
+      // Priced per kg, ordered by the piece, never weighed: bill nominal
+      // kilos, which is also what its allocations hold.
+      const kg = p['Pricing basis'] === 'Per kg' && l.UNIT !== 'kg' ? xeroNum(p['Nominal weight (kg)']) : 0;
+      if (p['Pricing basis'] === 'Per kg' && l.UNIT !== 'kg' && !kg) warnings.push(`${name}: priced per kg but has no nominal weight — billed as ${ordered} pieces`);
+      const note = q => { const n = kg ? q / kg : 0; return kg && Math.abs(n - Math.round(n)) < 0.001 ? pcs(Math.round(n)) : ''; };
+      let left = kg ? ordered * kg : ordered;
+      parts = [];
+      (ctx.allocations || []).filter(a => a['ORDER LINE ID'] === l.ID && !a['PO LINE ID'] && a['BATCH/LOT NUMBER']).forEach(a => {
+        const take = xeroRound(Math.min(left, xeroNum(a['QTY ALLOCATED'])), 3);
+        if (take <= 0) return;
+        const same = parts.find(x => x.lot === a['BATCH/LOT NUMBER'] && x.wheel === a['PRODUCT CODE']);
+        if (same) same.qty = xeroRound(same.qty + take, 3);
+        else parts.push({ qty: take, lot: a['BATCH/LOT NUMBER'], wheel: a['PRODUCT CODE'] });
+        left = xeroRound(left - take, 3);
+      });
+      // Whatever no lot covers (still on a purchase order, or short).
+      if (left > 0.0001) parts.push({ qty: left, lot: '' });
+      parts.forEach(x => { x.note = note(x.qty); });
     }
-    if (l.REPLACES) description += ` (replaces ${ctx.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES})`;
-    const lots = xeroLotsText(l, ctx);
-    if (lots) description += ` · ${lots}`;
 
     const price = xeroUnitPrice(p);
     if (!price) warnings.push(`${name}: no price — fill it in on the draft in Xero`);
     if (!p['Xero account code']) warnings.push(`${name}: no Xero account code`);
     if (!p['VAT rate']) warnings.push(`${name}: no VAT rate`);
-    lines.push({
-      itemCode: p['Xero item code'] || '',
-      description,
-      qty: xeroRound(qty, 3),
-      price: xeroRound(price, 2),
-      discount,
-      account: p['Xero account code'] || '',
-      tax: xeroTaxType(p['VAT rate'])
+    const replaces = l.REPLACES ? ` (replaces ${ctx.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES})` : '';
+    parts.forEach(x => {
+      const bbe = x.lot ? xeroDate((ctx.deliveryByKey || {})[`${x.wheel} ${x.lot}`]?.['BEST BEFORE DATE']) : '';
+      const lotText = x.lot ? `Lot ${x.lot}${bbe ? ` (BB ${bbe})` : ''}` : '';
+      lines.push({
+        itemCode: p['Xero item code'] || '',
+        description: [name + replaces, x.note, lotText].filter(Boolean).join(' · '),
+        qty: xeroRound(x.qty, 3),
+        price: xeroRound(price, 2),
+        discount,
+        account: p['Xero account code'] || '',
+        tax: xeroTaxType(p['VAT rate'])
+      });
     });
   });
 
@@ -143,22 +167,6 @@ function xeroInvoiceFor(order, ctx) {
 }
 
 // The CSV rows (header first) for invoices from xeroInvoiceFor().
-// "Lot 24-117 (BB 01/03/2027), Lot 24-121 (BB 08/03/2027)" for a line.
-function xeroLotsText(line, ctx) {
-  const seen = new Set();
-  return (ctx.allocations || [])
-    .filter(a => a['ORDER LINE ID'] === line.ID && !a['PO LINE ID'] && a['BATCH/LOT NUMBER'])
-    .map(a => {
-      const key = `${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`;
-      if (seen.has(key)) return '';
-      seen.add(key);
-      const bbe = xeroDate((ctx.deliveryByKey || {})[key]?.['BEST BEFORE DATE']);
-      return `Lot ${a['BATCH/LOT NUMBER']}${bbe ? ` (BB ${bbe})` : ''}`;
-    })
-    .filter(Boolean)
-    .join(', ');
-}
-
 function xeroCsvRows(invoices) {
   const rows = [XERO_INVOICE_HEADERS];
   invoices.forEach(inv => {
