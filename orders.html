@@ -172,8 +172,9 @@
 
   // ---- load + list ----
 
+  // Resolves true once everything is loaded, false if it couldn't be.
   async function loadAll() {
-    if (!requireAuth()) return;
+    if (!requireAuth()) return false;
     const cfg = getStoredConfig();
     setStatus('Loading...');
     try {
@@ -205,8 +206,10 @@
       renderTable();
       setStatus(`Loaded ${ordersData.length} order(s).`, 'ok');
       checkDeepLink();
+      return true;
     } catch (err) {
       setStatus('Error loading: ' + err.message, 'error');
+      return false;
     }
   }
 
@@ -1050,6 +1053,16 @@
         sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token),
         sheetsGet(cfg.spreadsheetId, 'Allocations!A:A', token)
       ]);
+      // Rows are deleted by position, so check each still holds the row this
+      // page thinks it does — if the sheet has moved on, stop before touching it.
+      const doomedLines = orderLinesData.filter(l => removedIds.has(l.obj.ID));
+      const doomedAllocs = allocationsData.filter(a => removedIds.has(a.obj['ORDER LINE ID']));
+      const cutIdRows = lostCuts.length ? await sheetsGet(cfg.spreadsheetId, 'Cuts!A:A', token) : [];
+      const moved = (idRows, recs) => recs.some(r => (idRows[r.rowNumber - 1] || [])[0] !== r.obj.ID);
+      if (moved(lineIdRows, doomedLines) || moved(allocIdRows, doomedAllocs) || moved(cutIdRows, lostCuts)) {
+        setDlgStatus('This order changed in the sheet since the page loaded. Nothing was saved — close it, press Reload and edit again.', 'error');
+        return;
+      }
       let lineBase = lineIdRows.length ? lineIdRows : [['ID']];
       const placed = expandDraftLines(changed).map(l => {
         const lineId = nextId(lineBase, 'OL');
@@ -1083,14 +1096,13 @@
         .map(([col, v]) => updateCellRequest(ordersSid, order.rowNumber, col, v));
       if (lineRows.length) requests.push(appendRowsRequest(linesSid, lineRows));
       if (allocRows.length) requests.push(appendRowsRequest(allocsSid, allocRows));
-      requests.push(...deleteRowsRequests(linesSid, orderLinesData.filter(l => removedIds.has(l.obj.ID)).map(l => l.rowNumber)));
-      requests.push(...deleteRowsRequests(allocsSid, allocationsData.filter(a => removedIds.has(a.obj['ORDER LINE ID'])).map(a => a.rowNumber)));
+      requests.push(...deleteRowsRequests(linesSid, doomedLines.map(l => l.rowNumber)));
+      requests.push(...deleteRowsRequests(allocsSid, doomedAllocs.map(a => a.rowNumber)));
       if (lostCuts.length) requests.push(...deleteRowsRequests(cutsSid, lostCuts.map(c => c.rowNumber)));
       await sheetsBatchUpdate(cfg.spreadsheetId, requests, token);
 
       editing = null;
-      await refreshAfterAllocationChange(order.obj.ID);
-      setDlgStatus(alloc.short ? `Saved — ${alloc.short} line(s) short of stock. Use Replace to swap them.` : 'Order updated.', alloc.short ? 'error' : 'ok');
+      if (await refreshAfterAllocationChange(order.obj.ID)) setDlgStatus(alloc.short ? `Saved — ${alloc.short} line(s) short of stock. Use Replace to swap them.` : 'Order updated.', alloc.short ? 'error' : 'ok');
     } catch (err) {
       setDlgStatus('Error: ' + err.message, 'error');
     }
@@ -1369,8 +1381,35 @@
     return out;
   }
 
-  async function appendAllocations(cfg, rows) {
-    const existing = await sheetsGet(cfg.spreadsheetId, 'Allocations!A:A', token);
+  // Writes new Allocations rows. The tab is re-read first and each row trimmed
+  // to what its line still needs according to the sheet, not this page's
+  // copy of it — so a click made on out-of-date data (a refresh that failed,
+  // the order open in a second tab) can't allocate the same stock twice.
+  // `needs` gives a line's need directly ({ lineId: qty in stock units }) when
+  // this page's copy of the line is about to change (Replace); lines this page
+  // doesn't have yet (just placed) hold nothing, so aren't trimmed.
+  // Returns how many rows were dropped or cut short.
+  async function appendAllocations(cfg, rows, needs = {}) {
+    const existing = await sheetsGet(cfg.spreadsheetId, 'Allocations!A:H', token);
+    const head = existing[0] || [];
+    const lineCol = head.indexOf('ORDER LINE ID'), qtyCol = head.indexOf('QTY ALLOCATED');
+    const held = {};
+    if (lineCol >= 0 && qtyCol >= 0) existing.slice(1).forEach(r => { held[r[lineCol]] = (held[r[lineCol]] || 0) + (parseFloat(r[qtyCol]) || 0); });
+    const room = {};
+    let trimmed = 0;
+    rows = rows.flatMap(r => {
+      if (!(r.lineId in room)) {
+        const line = orderLinesData.find(x => x.obj.ID === r.lineId);
+        const need = r.lineId in needs ? needs[r.lineId] : line ? lineNeed(line.obj) : null;
+        room[r.lineId] = need === null ? Infinity : roundQty(need - (held[r.lineId] || 0));
+      }
+      const qty = roundQty(Math.min(r.qty, room[r.lineId]));
+      if (qty < r.qty - 0.0001) trimmed++;
+      if (qty <= 0.0001) return [];
+      room[r.lineId] = roundQty(room[r.lineId] - qty);
+      return [{ ...r, qty }];
+    });
+    if (!rows.length) return trimmed;
     let base = existing.length ? existing : [['ID']];
     const values = rows.map(r => {
       const id = nextId(base, 'ALO');
@@ -1378,6 +1417,7 @@
       return [id, r.lineId, r.code, r.batch || '', r.qty, todayIso(), '', r.poLineId || ''];
     });
     await sheetsAppendRows(cfg.spreadsheetId, 'Allocations!A:H', values, token);
+    return trimmed;
   }
 
   async function handleAllocateAll(order) {
@@ -1389,8 +1429,9 @@
     if (!cfg) return;
     setDlgStatus('Allocating…');
     try {
-      await appendAllocations(cfg, rows);
-      await refreshAfterAllocationChange(order.obj.ID);
+      const trimmed = await appendAllocations(cfg, rows);
+      if (!await refreshAfterAllocationChange(order.obj.ID)) return;
+      if (trimmed) { setDlgStatus('Some of this was already allocated — this page was out of date. It now shows what the sheet holds.', 'error'); return; }
       const left = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID && outstandingFor(l.obj) > 0.0001).length;
       setDlgStatus(left ? `Allocated what's in stock — ${left} line(s) still short. Use Replace to swap them.` : 'Every line is allocated.', left ? 'error' : 'ok');
     } catch (err) {
@@ -1506,9 +1547,9 @@
     if (!cfg) return;
     status.textContent = 'Allocating…';
     try {
-      await appendAllocations(cfg, rows);
+      const trimmed = await appendAllocations(cfg, rows);
       allocDialog.close();
-      await refreshAfterAllocationChange(order.obj.ID);
+      if (await refreshAfterAllocationChange(order.obj.ID) && trimmed) setDlgStatus('Some of this was already allocated — this page was out of date. It now shows what the sheet holds.', 'error');
     } catch (err) {
       status.textContent = 'Error: ' + err.message; status.style.color = 'var(--crit)';
     }
@@ -1617,10 +1658,10 @@
       ], token);
       // Allocate the replacement from what's free, earliest best-before first.
       const { rows } = autoAllocate([{ lineId: l.ID, code: newCode, qty }], order.obj['DELIVERY DATE']);
-      if (rows.length) await appendAllocations(cfg, rows);
+      const src = stockSource(newCode, unit);
+      if (rows.length) await appendAllocations(cfg, rows, { [l.ID]: roundQty(qty * (src.perUnit || 1)) });
       replaceDialog.close();
-      await refreshAfterAllocationChange(order.obj.ID);
-      setDlgStatus(`Replaced with ${p['Product name']}.`, 'ok');
+      if (await refreshAfterAllocationChange(order.obj.ID)) setDlgStatus(`Replaced with ${p['Product name']}.`, 'ok');
     } catch (err) {
       status.textContent = 'Error: ' + err.message; status.style.color = 'var(--crit)';
     }
@@ -1746,11 +1787,19 @@
   // every line's allocated total consistent), nudges the order's own STATUS
   // between New <-> Allocated if that's newly warranted, then re-renders
   // the still-open dialog for this same order.
+  //
+  // If the reload fails the dialog would still show the old figures — the
+  // trap that let ORD773 be allocated twice — so it says so instead.
+  // Resolves false then.
   async function refreshAfterAllocationChange(orderId) {
-    await loadAll();
+    if (!await loadAll()) {
+      setDlgStatus('Saved, but the order couldn\'t be reloaded, so what\'s shown here is out of date. Close it and press Reload before changing anything else.', 'error');
+      return false;
+    }
     await maybeAutoUpdateStatus(orderId);
     const order = ordersData.find(r => r.obj.ID === orderId);
     if (order) { renderViewForm(order); setDlgStatus('Updated.', 'ok'); }
+    return true;
   }
 
   async function maybeAutoUpdateStatus(orderId) {

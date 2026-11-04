@@ -266,9 +266,9 @@
           orderId: order.ID,
           cutLife: prod['Cut shelf life (days)'],
           // The wheel lot(s) this piece was allocated from, when it has been.
-          lots: data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
+          lots: [...new Set(data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
             ? `awaiting ${(data.poOfLine[a['PO LINE ID']] || {}).ID || 'PO'}`
-            : a['BATCH/LOT NUMBER'])
+            : a['BATCH/LOT NUMBER']))]
         });
       });
     });
@@ -293,7 +293,12 @@
         }
         const del = data.deliveryByKey[`${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`];
         return { lot: a['BATCH/LOT NUMBER'], qty: parseFloat(a['QTY ALLOCATED']) || 0, bbe: del ? del['BEST BEFORE DATE'] : '' };
-      });
+      }).reduce((out, x) => {
+        // One entry per lot (or PO), however many allocation rows it took.
+        const same = out.find(y => (y.lot || '') === (x.lot || '') && (y.awaiting || '') === (x.awaiting || ''));
+        if (same) same.qty += x.qty; else out.push(x);
+        return out;
+      }, []);
       const allocated = lots.reduce((s, x) => s + x.qty, 0);
       return {
         product: prod,
