@@ -76,8 +76,11 @@
   let stockPos = {};        // computeStockPosition() result, refreshed each time the picker renders
   let productGroups = [];   // ProductGroups — a cut product's display name
   let sheetIds = {};         // tab name -> sheetId, lazily populated (needed to delete an allocation row)
-  let draftLines = [];       // working line items being staged — New Order wizard, or "add product" in the View dialog
-  let activeSummaryId = 'ord_orderSummary'; // which dialog's summary element renderOrderSummary() writes to, set by renderProductPicker()
+  let draftLines = [];       // working line items being staged — New Order, or Edit order
+  // Set while an existing order is open in the Edit order form: { order,
+  // lineIds }. Its own allocations are left out of the stock pool meanwhile
+  // (poolAllocations), so its lots show as free to re-pick.
+  let editing = null;
   let lineHeaders = [];      // OrderLines' header row — where REPLACES lives
   let dirtyCheck = null;     // set per dialog mode; attachDiscardGuard calls it via a stable wrapper
 
@@ -304,15 +307,24 @@
     else window.embedNothingToShow?.();
   }
 
-  // ---- create order (New Order wizard) ----
+  // ---- create order (New Order wizard) / edit an existing one ----
+  //
+  // Edit order reuses the New Order form, filled in from the order: its
+  // lines become draft lines (cut portions back into one family line) with
+  // their allocations as picked lots. Saving rewrites only the lines that
+  // changed; an untouched line keeps its row, allocations and any weighed
+  // pieces.
 
-  function renderNewOrderForm() {
-    draftLines = [];
+  function renderNewOrderForm(order = null) {
+    editing = order ? { order, lineIds: new Set(orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID).map(l => l.obj.ID)) } : null;
+    draftLines = order ? draftFromOrder(order) : [];
     const info = getStoredUserInfo();
+    const o = order ? order.obj : null;
     form.innerHTML = `
       <div class="dlg-h">
         <div>
-          <div class="ttl">New Order</div>
+          <div class="ttl">${o ? `Edit ${escapeHtml(o.ID)}` : 'New Order'}</div>
+          ${o ? `<div class="subtitle">${escapeHtml(o.CUSTOMER)} · ${escapeHtml(o.STATUS || 'New')}</div>` : ''}
         </div>
         <button type="button" class="dlg-close" data-cancel aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -324,15 +336,15 @@
             <div class="no-head">
               <div class="field">
                 <label>Customer *</label>
-                <select id="ord_customer"><option value="">Select a customer…</option>${customers.map(c => `<option value="${escapeHtml(c['Customer name (as in Xero)'])}">${escapeHtml(c['Customer name (as in Xero)'])}</option>`).join('')}</select>
+                <select id="ord_customer"><option value="">Select a customer…</option>${customers.map(c => c['Customer name (as in Xero)']).map(n => `<option value="${escapeHtml(n)}"${o && n === o.CUSTOMER ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}</select>
               </div>
               <div class="field">
                 <label>Order date</label>
-                <input type="date" id="ord_orderDate" value="${todayIso()}">
+                <input type="date" id="ord_orderDate" value="${escapeHtml(o ? o.DATE : todayIso())}">
               </div>
               <div class="field">
                 <label>Placed by *</label>
-                <input type="text" id="ord_placedBy" value="${escapeHtml(info.name || info.email || '')}" placeholder="Your name">
+                <input type="text" id="ord_placedBy" value="${escapeHtml(o ? o['PLACED BY'] : (info.name || info.email || ''))}" placeholder="Your name">
               </div>
             </div>
             <div class="field">
@@ -345,7 +357,7 @@
             <div id="ord_draftList" class="no-list"></div>
             <div class="field" style="margin-top:12px;">
               <label>Notes</label>
-              <textarea id="ord_notes" placeholder="Optional"></textarea>
+              <textarea id="ord_notes" placeholder="Optional">${escapeHtml(o?.NOTES || '')}</textarea>
             </div>
           </div>
           <div class="no-search">
@@ -358,31 +370,41 @@
       </div>
       <div class="dlg-f">
         <div class="order-total" aria-live="polite"><span class="ot-l" id="ord_totalLabel">Order total</span><span class="ot-v" id="ord_total">£0.00</span></div>
-        <button type="button" class="btn ghost" data-cancel>Cancel</button>
-        <button type="submit" class="btn" id="orderSubmitBtn">Place order</button>
+        <button type="button" class="btn ghost" ${o ? 'data-back' : 'data-cancel'}>Cancel</button>
+        <button type="submit" class="btn" id="orderSubmitBtn">${o ? 'Save changes' : 'Place order'}</button>
       </div>
     `;
     dialogEl.classList.add('dlg-wide');
-    renderProductPicker(undefined, undefined, [], undefined, true);
+    renderProductPicker();
 
     const customerSel = form.querySelector('#ord_customer');
     const searchInput = form.querySelector('#ord_productSearch');
     enhanceSelect(customerSel);
 
-    dirtyCheck = () => !!customerSel.value || draftLines.length > 0
-      || !!form.querySelector('#ord_notes').value.trim();
-
     // Delivery: pick a week; the customer's usual day in it is the date,
     // unless a specific day is chosen (which also goes into the notes).
-    deliveryPick = { week: defaultDeliveryWeek(), day: null };
+    deliveryPick = o?.['DELIVERY DATE'] ? pickForDate(o['DELIVERY DATE']) : { week: defaultDeliveryWeek(), day: null };
     renderDeliveryPicker();
+
+    const snapshot = () => JSON.stringify([customerSel.value, form.querySelector('#ord_orderDate').value, form.querySelector('#ord_placedBy').value,
+      form.querySelector('#ord_notes').value, form.querySelector('#ord_deliveryDate').value, draftLines.map(l => [l.code, draftSig(l)])]);
+    const initial = snapshot();
+    dirtyCheck = o ? () => snapshot() !== initial
+      : () => !!customerSel.value || draftLines.length > 0 || !!form.querySelector('#ord_notes').value.trim();
     customerSel.addEventListener('change', renderDeliveryPicker);
     customerSel.addEventListener('change', renderOrderTotal);
 
-    searchInput.addEventListener('input', () => renderProductPicker(undefined, undefined, [], undefined, true));
+    searchInput.addEventListener('input', () => renderProductPicker());
 
+    form.onchange = null;
+    form.oninput = null;
     form.onclick = (e) => {
       if (e.target.closest('[data-cancel]')) { guard.guardedClose(); return; }
+      if (e.target.closest('[data-back]')) {
+        if (dirtyCheck() && !confirm('Discard your changes to this order?')) return;
+        renderViewForm(ordersData.find(r => r.obj.ID === o.ID) || order);
+        return;
+      }
       const wk = e.target.closest('[data-week]');
       if (wk) { deliveryPick = { week: parseInt(wk.dataset.week, 10), day: null }; renderDeliveryPicker(); return; }
       const dy = e.target.closest('[data-day]');
@@ -393,15 +415,46 @@
       if (pick) openLotPicker(pick.dataset.pickOpen);
     };
 
-    form.onsubmit = handleCreateOrderSubmit;
+    form.onsubmit = o ? handleSaveEditSubmit : handleCreateOrderSubmit;
   }
 
-  // Every Active product, grouped by category — no supplier scoping (unlike
-  // the PO picker), since a customer order can include anything sellable.
-  // Shared by the New Order wizard and the View dialog's "add product"
-  // picker: `mountId`/`searchId`/`summaryId` point at whichever dialog is
-  // open, and `excludeCodes` keeps products already on the order out of the
-  // View dialog's picker (irrelevant — always empty — for a brand-new order).
+  // An order's lines as draft lines: cut portions ordered by the piece fold
+  // back into their family line (in smallest pieces), everything else is a
+  // line per product. Each keeps its OrderLines IDs and a signature of its
+  // quantity and lots, so saving can tell which ones were changed.
+  function draftFromOrder(order) {
+    const picksOf = id => allocationsData.filter(a => a.obj['ORDER LINE ID'] === id).map(({ obj: a }) => ({
+      code: a['PRODUCT CODE'], batch: a['PO LINE ID'] ? undefined : a['BATCH/LOT NUMBER'],
+      poLineId: a['PO LINE ID'] || undefined, qty: roundQty(parseFloat(a['QTY ALLOCATED']) || 0)
+    }));
+    const out = [];
+    orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID).forEach(({ obj: l }) => {
+      const code = l['PRODUCT CODE'], qty = parseFloat(l['QTY ORDERED']) || 0;
+      const p = productOf(code);
+      const fam = l.UNIT === 'pc' && !l.REPLACES ? familyByCode(FAMILY_PREFIX + (p?.['Cut from (code)'] || code)) : null;
+      const portion = fam?.portions.find(x => x.code === code);
+      const key = portion ? fam.code : code;
+      let d = out.find(x => x.code === key && (portion || x.unit === l.UNIT));
+      if (!d) {
+        d = portion ? { code: key, name: fam.name, units: 0, family: true }
+          : { code, name: p?.['Product name'] || code, qty: 0, unit: l.UNIT, replaces: l.REPLACES || '' };
+        d.picks = []; d.lineIds = [];
+        out.push(d);
+      }
+      if (portion) d.units += Math.round(qty) * portion.units; else d.qty = roundQty(d.qty + qty);
+      d.picks.push(...picksOf(l.ID));
+      d.lineIds.push(l.ID);
+    });
+    out.forEach(d => { d.sig = draftSig(d); });
+    return out;
+  }
+
+  // Quantity + lots, order-independent — equal means the line is untouched.
+  function draftSig(l) {
+    const picks = (l.picks || []).map(x => `${x.poLineId ? 'po:' + x.poLineId : x.batch}=${roundQty(x.qty)}`).sort();
+    return JSON.stringify([l.code, l.family ? l.units : l.qty, l.unit || '', picks]);
+  }
+
   // ---- delivery week picker (New Order) ----
   //
   // Orders go out weekly, so the picker offers weeks; the date saved is the
@@ -429,18 +482,31 @@
     return c?.['Delivery zone'] === 'Out of London' ? 2 : 3;
   }
 
+  // The week/day pick that lands on an existing order's delivery date.
+  function pickForDate(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    const weekday = (d.getDay() + 6) % 7; // Monday 0
+    const monday = new Date(d); monday.setDate(d.getDate() - weekday);
+    const week = Math.round((monday - mondayFrom(0)) / (7 * 864e5));
+    return { week, day: weekday === usualDeliveryDay() ? null : weekday };
+  }
+
   function renderDeliveryPicker() {
     const usual = usualDeliveryDay();
     const monday = mondayFrom(deliveryPick.week);
-    const todayStr = todayIso();
+    // Editing can keep (or correct) a date already past; a new order can't.
+    const todayStr = editing ? '' : todayIso();
     const dayDate = i => { const d = new Date(monday); d.setDate(d.getDate() + i); return d; };
     // A usual day already gone this week falls back to the next day still open.
     let dayIdx = deliveryPick.day ?? usual;
     while (isoLocal(dayDate(dayIdx)) < todayStr && dayIdx < 4) dayIdx++;
     const range = d => { const e = new Date(d); e.setDate(e.getDate() + 6); return `${d.getDate()} ${d.toLocaleDateString('en-GB', { month: 'short' })}–${e.getDate()} ${e.toLocaleDateString('en-GB', { month: 'short' })}`; };
-    form.querySelector('#ord_weekChips').innerHTML = Array.from({ length: PICKER_WEEKS }, (_, w) => {
+    // The order's own week stays on offer when editing, even if it's past or far off.
+    const weeks = Array.from({ length: PICKER_WEEKS }, (_, w) => w);
+    if (!weeks.includes(deliveryPick.week)) weeks.push(deliveryPick.week);
+    form.querySelector('#ord_weekChips').innerHTML = weeks.sort((a, b) => a - b).map(w => {
       const m = mondayFrom(w);
-      const label = w === 0 ? 'This week' : w === 1 ? 'Next week' : `w/c ${m.getDate()} ${m.toLocaleDateString('en-GB', { month: 'short' })}`;
+      const label = w === 0 ? 'This week' : w === 1 ? 'Next week' : w === -1 ? 'Last week' : `w/c ${m.getDate()} ${m.toLocaleDateString('en-GB', { month: 'short' })}`;
       return `<button type="button" class="wk-chip${w === deliveryPick.week ? ' on' : ''}" data-week="${w}" role="radio" aria-checked="${w === deliveryPick.week}">
         <span class="wk-l">${escapeHtml(label)}</span><span class="wk-r">${escapeHtml(range(m))}</span></button>`;
     }).join('');
@@ -461,31 +527,32 @@
     notesEl.value = (specific ? [REQUESTED_PREFIX + date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })] : []).concat(rest).join('\n').trim();
   }
 
-  // `compact`: the New Order dialog's narrow search column — small cards
-  // with a + button; quantities are then set in the order list beside it.
-  function renderProductPicker(mountId = 'ord_productPicker', searchId = 'ord_productSearch', excludeCodes = [], summaryId = 'ord_orderSummary', compact = false) {
-    activeSummaryId = summaryId;
+  // Every Active product, grouped by category — no supplier scoping (unlike
+  // the PO picker), since a customer order can include anything sellable.
+  // The New Order / Edit order dialog's narrow search column: small cards;
+  // clicking one opens the lot pop-up, and the line joins the order list.
+  function renderProductPicker() {
     stockPos = computeStockPosition({
-      deliveries: deliveriesData.map(r => r.obj), allocations: allocationsData.map(r => r.obj),
+      deliveries: deliveriesData.map(r => r.obj), allocations: poolAllocations().map(r => r.obj),
       orders: ordersData.map(r => r.obj), orderLines: orderLinesData.map(r => r.obj),
       purchaseOrders, poLines
     });
-    const mount = form.querySelector(`#${mountId}`);
+    const mount = form.querySelector('#ord_productPicker');
     const active = products.filter(p => (p.Active || 'Yes') !== 'No');
     // A whole and the portions cut from it are one row (a "cut family");
     // everything else is a row per SKU, as before.
-    const families = cutFamilies(active).filter(f => !f.portions.some(x => excludeCodes.includes(x.code)));
+    const families = cutFamilies(active);
     const inFamily = new Set(cutFamilies(active).flatMap(f => f.portions.map(x => x.code)));
     let items = active
-      .filter(p => !excludeCodes.includes(p['Product code']) && !inFamily.has(p['Product code']))
+      .filter(p => !inFamily.has(p['Product code']))
       .map(p => ({ kind: 'sku', p, name: p['Product name'], cat: p['Category'] || 'Uncategorised', codes: [p['Product code']] }))
       .concat(families.map(f => ({ kind: 'family', f, name: f.name, cat: f.category || 'Uncategorised', codes: f.portions.flatMap(x => [x.code, x.p['Product name']]) })));
     if (!items.length) {
-      mount.innerHTML = `<div class="empty" style="padding:12px 0;">${excludeCodes.length ? 'Every active product is already on this order.' : 'No products set up yet.'}</div>`;
+      mount.innerHTML = `<div class="empty" style="padding:12px 0;">No products set up yet.</div>`;
       renderOrderSummary();
       return;
     }
-    const term = searchNorm((form.querySelector(`#${searchId}`).value || '').trim());
+    const term = searchNorm((form.querySelector('#ord_productSearch').value || '').trim());
     if (term) items = items.filter(it => searchMatch(it.name, term) || it.codes.some(c => searchMatch(c, term)));
     if (!items.length) {
       mount.innerHTML = `<div class="empty" style="padding:12px 0;">No products match "${escapeHtml(term)}".</div>`;
@@ -500,7 +567,7 @@
     mount.innerHTML = [...byCategory.keys()].sort().map(cat => `
       <div class="cat-group">
         <div class="cat-group-head"><span class="g-name">${escapeHtml(cat)}</span><span class="g-count">${byCategory.get(cat).length}</span></div>
-        ${byCategory.get(cat).map(it => compact ? pickCardHtml(it) : it.kind === 'family' ? familyPickerRowHtml(it.f) : productPickerRowHtml(it.p)).join('')}
+        ${byCategory.get(cat).map(it => pickCardHtml(it)).join('')}
       </div>
     `).join('');
     renderOrderSummary();
@@ -584,50 +651,7 @@
     return `Cut: ${parts.map(x => `${x.count > 1 ? x.count + ' × ' : ''}${short(x.portion.label)}`).join(' + ')}${kg ? ` · ≈ ${roundQty(kg)}kg` : ''}`;
   }
 
-  function familyPickerRowHtml(fam) {
-    const line = draftLines.find(l => l.code === fam.code);
-    const units = line ? line.units : 0;
-    const photoUrl = productPhoto(fam.root || fam.small.p);
-    const photoHtml = photoUrl ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">` : `<span class="cr-photo"></span>`;
-    const subText = [(fam.root || fam.small.p)['Producer'], `Cut to order · in ${fam.small.label} pieces${fam.small.kg ? ` (${fam.small.kg}kg)` : ''}`].filter(Boolean).join(' · ');
-    const stockHtml = fam.root
-      ? stockPositionHtml(stockPos[fam.rootCode], productOrderMeta(fam.root).unit, 'Whole')
-      : '';
-    return `
-      <div class="cat-row picker-row" data-code="${escapeHtml(fam.code)}">
-        ${photoHtml}
-        <div class="cr-info">
-          <div class="cr-name-line"><span class="cr-name">${escapeHtml(fam.name)}</span></div>
-          <div class="cr-sub">${escapeHtml(subText)}</div>
-          ${stockHtml}
-          <div class="cr-cut" title="${escapeHtml(familyHint(fam, units))}">${escapeHtml(familyHint(fam, units))}</div>
-        </div>
-        <div class="cr-stepper">
-          <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(fam.code)}" ${units <= 0 ? 'disabled' : ''} aria-label="Remove one piece">−</button>
-          <div class="stepper-qty">
-            <input type="number" class="stepper-qty-input" data-code="${escapeHtml(fam.code)}" value="${units || ''}" placeholder="0" min="0" step="1">
-            <span class="stepper-unit-suffix">× ${escapeHtml(fam.small.label)}</span>
-          </div>
-          <button type="button" class="stepper-btn" data-step="1" data-code="${escapeHtml(fam.code)}" aria-label="Add one piece">+</button>
-        </div>
-      </div>`;
-  }
 
-  function setFamilyUnits(fam, units, opts = {}) {
-    units = Math.max(0, Math.round(units));
-    const line = draftLines.find(l => l.code === fam.code);
-    if (!units) draftLines = draftLines.filter(l => l.code !== fam.code);
-    else if (line) line.units = units;
-    else draftLines.push({ code: fam.code, name: fam.name, units, family: true });
-    const row = form.querySelector(`.picker-row[data-code="${CSS.escape(fam.code)}"]`);
-    if (row) {
-      if (!opts.skipInputValue) row.querySelector('.stepper-qty-input').value = units || '';
-      const cut = row.querySelector('.cr-cut');
-      cut.textContent = cut.title = familyHint(fam, units);
-      row.querySelector('[data-step="-1"]').disabled = units <= 0;
-    }
-    renderOrderSummary();
-  }
 
   // What actually gets saved: cut families turned into their real cuts.
   // Each call gets its own copy of the picked lots (a family's cuts share one
@@ -643,13 +667,6 @@
 
   function renderOrderSummary() {
     const n = draftLines.length;
-    // View dialog: the count lives on its footer button, shown once
-    // something has been picked.
-    const addBtn = form.querySelector('#ord_view_addLinesBtn');
-    if (addBtn) {
-      addBtn.hidden = !n;
-      addBtn.textContent = `Add ${n} item${n === 1 ? '' : 's'} to order`;
-    }
     renderDraftList();
     renderOrderTotal();
     form.querySelectorAll('.pick-card').forEach(card => {
@@ -657,7 +674,7 @@
       card.classList.toggle('in', !!line);
       card.querySelector('.pick-badge').textContent = line ? draftBadge(line) : '';
     });
-    const el = form.querySelector(`#${activeSummaryId}`);
+    const el = form.querySelector('#ord_orderSummary');
     if (!el) return;
     el.textContent = n ? `${n} item${n === 1 ? '' : 's'}` : '';
   }
@@ -919,7 +936,8 @@
       if (!(fam ? line.units : line.qty)) return;
       line.picks = planPicks(line, date, readPicks().map(({ max, ...x }) => x));
       const at = draftLines.findIndex(l => l.code === code);
-      if (at >= 0) draftLines[at] = line; else draftLines.push(line);
+      // Keep an existing line's OrderLines IDs, signature and REPLACES.
+      if (at >= 0) draftLines[at] = { ...draftLines[at], ...line }; else draftLines.push(line);
       lotPickDialog.close();
       renderOrderSummary();
     };
@@ -928,120 +946,11 @@
     qtyInput.select();
   }
 
-  function productPickerRowHtml(p) {
-    const code = p['Product code'];
-    const meta = productOrderMeta(p);
-    const line = draftLines.find(l => l.code === code);
-    const qty = line ? line.qty : 0;
-    const photoUrl = productPhoto(p);
-    const photoHtml = photoUrl
-      ? `<img class="cr-photo" src="${escapeHtml(photoUrl)}" alt="" loading="lazy">`
-      : `<span class="cr-photo"></span>`;
-    const subText = [p['Producer'], meta.isCase ? `${meta.perCase} × ${meta.unit === 'kg' ? (parseFloat(p['Nominal weight (kg)']) || '?') + 'kg' : '1 piece'} per case` : `Ordered per ${meta.unit === 'kg' ? 'kg' : 'piece'}`].filter(Boolean).join(' · ');
-    // A cut portion has no stock of its own — show the whole it's cut from.
-    const parent = p['Cut from (code)'] ? productOf(p['Cut from (code)']) : null;
-    const stockHtml = parent
-      ? stockPositionHtml(stockPos[parent['Product code']], productOrderMeta(parent).unit, `Cut from ${parent['Product code']}`)
-      : stockPositionHtml(stockPos[code], meta.unit);
-    return `
-      <div class="cat-row picker-row" data-code="${escapeHtml(code)}">
-        ${photoHtml}
-        <div class="cr-info">
-          <div class="cr-name-line"><span class="cr-name">${escapeHtml(p['Product name'])}</span></div>
-          <div class="cr-sub">${escapeHtml(subText)}</div>
-          ${stockHtml}
-        </div>
-        <div class="cr-stepper">
-          <button type="button" class="stepper-btn" data-step="-1" data-code="${escapeHtml(code)}" ${qty <= 0 ? 'disabled' : ''} aria-label="Remove one">−</button>
-          <div class="stepper-qty">${stepperQtyInputHtml(qty, meta, code)}</div>
-          <button type="button" class="stepper-btn" data-step="1" data-code="${escapeHtml(code)}" aria-label="Add one">+</button>
-        </div>
-      </div>`;
-  }
 
-  // The qty cell is a real <input> (not just +/- buttons) so a large or
-  // fractional quantity (100 cases, 1.6kg) can be typed directly instead of
-  // clicked one step at a time. Case items show/edit the case count, with
-  // the equivalent kg or piece total underneath; non-case items edit that
-  // tracked unit directly, decimals allowed for kg.
-  function stepperQtyInputHtml(qty, meta, code) {
-    const displayQty = qty > 0 ? (meta.isCase ? roundQty(qty / meta.step) : qty) : '';
-    const step = meta.isCase ? '1' : (meta.unit === 'kg' ? '0.01' : '1');
-    const suffix = meta.isCase ? `case${roundQty(qty / meta.step) === 1 ? '' : 's'}` : unitLabel(meta.unit);
-    const sub = meta.isCase ? `<span class="stepper-sub">${qty > 0 ? qtyUnit(qty, meta.unit) : ''}</span>` : '';
-    return `
-      <input type="number" class="stepper-qty-input" data-code="${escapeHtml(code)}" value="${displayQty}" placeholder="0" min="0" step="${step}">
-      <span class="stepper-unit-suffix">${escapeHtml(suffix)}</span>
-      ${sub}
-    `;
-  }
 
-  // Both the +/- buttons and typing into the qty <input> land here — the
-  // buttons pass a code+direction, direct input passes the code and reads
-  // its own field. `skipInputValue` avoids re-writing the input mid-keystroke.
-  function setDraftQty(code, qty, meta, p) {
-    const line = draftLines.find(l => l.code === code);
-    if (qty <= 0) {
-      draftLines = draftLines.filter(l => l.code !== code);
-    } else if (line) {
-      line.qty = qty;
-    } else {
-      draftLines.push({ code, name: p['Product name'], qty, unit: meta.unit });
-    }
-  }
 
-  function updateStepperRow(code, qty, meta, opts = {}) {
-    const row = form.querySelector(`.picker-row[data-code="${CSS.escape(code)}"]`);
-    if (!row) return;
-    if (!opts.skipInputValue) {
-      row.querySelector('.stepper-qty-input').value = qty > 0 ? (meta.isCase ? roundQty(qty / meta.step) : qty) : '';
-    }
-    const suffix = row.querySelector('.stepper-unit-suffix');
-    if (suffix && meta.isCase) suffix.textContent = `case${roundQty(qty / meta.step) === 1 ? '' : 's'}`;
-    const sub = row.querySelector('.stepper-sub');
-    if (sub) sub.textContent = qty > 0 ? qtyUnit(qty, meta.unit) : '';
-    row.querySelector('[data-step="-1"]').disabled = qty <= 0;
-  }
 
-  function adjustDraftQty(code, dir) {
-    if (code.startsWith(FAMILY_PREFIX)) {
-      const fam = familyByCode(code);
-      const line = draftLines.find(l => l.code === code);
-      if (fam) setFamilyUnits(fam, (line ? line.units : 0) + dir);
-      return;
-    }
-    const p = products.find(pr => pr['Product code'] === code);
-    if (!p) return;
-    const meta = productOrderMeta(p);
-    const line = draftLines.find(l => l.code === code);
-    const qty = Math.max(0, roundQty((line ? line.qty : 0) + dir * meta.step));
-    setDraftQty(code, qty, meta, p);
-    updateStepperRow(code, qty, meta);
-    renderOrderSummary();
-  }
 
-  // Typing directly into a picker row's qty <input> — for a case item the
-  // typed number is a case count (converted to the tracked unit); otherwise
-  // it's the tracked unit itself (kg allows decimals, e.g. 1.6).
-  function handleQtyInput(code) {
-    if (code.startsWith(FAMILY_PREFIX)) {
-      const fam = familyByCode(code);
-      const input = form.querySelector(`.picker-row[data-code="${CSS.escape(code)}"] .stepper-qty-input`);
-      if (fam && input) setFamilyUnits(fam, parseFloat(input.value) || 0, { skipInputValue: true });
-      return;
-    }
-    const p = products.find(pr => pr['Product code'] === code);
-    if (!p) return;
-    const meta = productOrderMeta(p);
-    const row = form.querySelector(`.picker-row[data-code="${CSS.escape(code)}"]`);
-    if (!row) return;
-    const entered = parseFloat(row.querySelector('.stepper-qty-input').value);
-    const clean = isNaN(entered) || entered < 0 ? 0 : entered;
-    const qty = roundQty(meta.isCase ? clean * meta.step : clean);
-    setDraftQty(code, qty, meta, p);
-    updateStepperRow(code, qty, meta, { skipInputValue: true });
-    renderOrderSummary();
-  }
 
   // Case-ordered products (Ordering unit = Case) can only be ordered in
   // whole cases — the +/- stepper moves qty by one case at a time,
@@ -1102,6 +1011,91 @@
     }
   }
 
+  // Saves the Edit order form. Lines whose quantity and lots are untouched
+  // keep their rows (and allocations, and any weighed pieces); every other
+  // line is replaced: old rows, allocations and cuts deleted, new rows
+  // written and allocated from the picked lots, then FEFO — the same as
+  // placing an order. It all goes in one spreadsheets.batchUpdate, which
+  // Google applies all or nothing; deletes go last so they can't move the
+  // header row being updated.
+  async function handleSaveEditSubmit(e) {
+    e.preventDefault();
+    const order = editing?.order;
+    if (!order) return;
+    const customer = form.querySelector('#ord_customer').value;
+    const deliveryDate = form.querySelector('#ord_deliveryDate').value;
+    const orderDate = form.querySelector('#ord_orderDate').value;
+    const placedBy = form.querySelector('#ord_placedBy').value.trim();
+    const notes = form.querySelector('#ord_notes').value.trim();
+    if (!customer) { setDlgStatus('Pick a customer.', 'error'); return; }
+    if (!deliveryDate) { setDlgStatus('Pick a delivery week.', 'error'); return; }
+    if (!placedBy) { setDlgStatus('Enter who placed this order.', 'error'); return; }
+    if (!draftLines.length) { setDlgStatus('An order needs at least one product — use Delete order to remove it.', 'error'); return; }
+
+    const kept = draftLines.filter(l => l.lineIds && draftSig(l) === l.sig);
+    const keptIds = new Set(kept.flatMap(l => l.lineIds));
+    const changed = draftLines.filter(l => !kept.includes(l));
+    const removedIds = new Set([...editing.lineIds].filter(id => !keptIds.has(id)));
+    const lostCuts = cutsData.filter(c => removedIds.has(c.obj['ORDER LINE ID']));
+    if (lostCuts.length && !confirm(`${lostCuts.length} piece(s) on the lines you changed are already cut and weighed. Their weights will be deleted and the kilos go back into wheel stock, so waste anything that can't be resold. Save anyway?`)) return;
+
+    const cfg = await ensureAuth(setDlgStatus);
+    if (!cfg) return;
+    setDlgStatus('Saving changes...');
+    try {
+      const [ordersSid, linesSid, allocsSid] = await Promise.all(['Orders', 'OrderLines', 'Allocations'].map(t => ensureSheetId(cfg, t)));
+      if (ordersSid === null || linesSid === null || allocsSid === null) throw new Error('Required tab not found — run Setup first.');
+      const cutsSid = lostCuts.length ? await ensureSheetId(cfg, 'Cuts') : null;
+      const [lineIdRows, allocIdRows] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token),
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:A', token)
+      ]);
+      let lineBase = lineIdRows.length ? lineIdRows : [['ID']];
+      const placed = expandDraftLines(changed).map(l => {
+        const lineId = nextId(lineBase, 'OL');
+        lineBase = lineBase.concat([[lineId]]);
+        return { ...l, lineId };
+      });
+      // Kept lines still hold their lots, which the edit's stock pool left out.
+      const taken = {};
+      allocationsData.filter(a => keptIds.has(a.obj['ORDER LINE ID'])).forEach(({ obj: a }) => {
+        const k = pickKey(a['PRODUCT CODE'], { batch: a['BATCH/LOT NUMBER'], poLineId: a['PO LINE ID'] });
+        taken[k] = roundQty((taken[k] || 0) + (parseFloat(a['QTY ALLOCATED']) || 0));
+      });
+      const alloc = autoAllocate(placed, deliveryDate, taken);
+      let allocBase = allocIdRows.length ? allocIdRows : [['ID']];
+      const allocRows = alloc.rows.map(r => {
+        const id = nextId(allocBase, 'ALO');
+        allocBase = allocBase.concat([[id]]);
+        return [id, r.lineId, r.code, r.batch || '', r.qty, todayIso(), '', r.poLineId || ''];
+      });
+      const width = Math.max(lineHeaders.length, 7);
+      const replacesCol = lineHeaders.indexOf('REPLACES');
+      const lineRows = placed.map(l => {
+        const row = Array(width).fill('');
+        [l.lineId, order.obj.ID, l.code, l.qty, l.unit, 'New', ''].forEach((v, i) => { row[i] = v; });
+        if (l.replaces && replacesCol >= 0) row[replacesCol] = l.replaces;
+        return row;
+      });
+
+      // Orders columns: B DATE, C CUSTOMER, D DELIVERY DATE, F NOTES, G PLACED BY.
+      const requests = [[1, orderDate], [2, customer], [3, deliveryDate], [5, notes], [6, placedBy]]
+        .map(([col, v]) => updateCellRequest(ordersSid, order.rowNumber, col, v));
+      if (lineRows.length) requests.push(appendRowsRequest(linesSid, lineRows));
+      if (allocRows.length) requests.push(appendRowsRequest(allocsSid, allocRows));
+      requests.push(...deleteRowsRequests(linesSid, orderLinesData.filter(l => removedIds.has(l.obj.ID)).map(l => l.rowNumber)));
+      requests.push(...deleteRowsRequests(allocsSid, allocationsData.filter(a => removedIds.has(a.obj['ORDER LINE ID'])).map(a => a.rowNumber)));
+      if (lostCuts.length) requests.push(...deleteRowsRequests(cutsSid, lostCuts.map(c => c.rowNumber)));
+      await sheetsBatchUpdate(cfg.spreadsheetId, requests, token);
+
+      editing = null;
+      await refreshAfterAllocationChange(order.obj.ID);
+      setDlgStatus(alloc.short ? `Saved — ${alloc.short} line(s) short of stock. Use Replace to swap them.` : 'Order updated.', alloc.short ? 'error' : 'ok');
+    } catch (err) {
+      setDlgStatus('Error: ' + err.message, 'error');
+    }
+  }
+
   // ---- view order + allocate stock ----
 
   function openViewDialog(orderId) {
@@ -1115,9 +1109,9 @@
   function renderViewForm(order) {
     dialogEl.classList.remove('dlg-wide');
     dirtyCheck = null; // every action here (allocate/remove/status) saves immediately — nothing unsaved to lose
-    draftLines = []; // staged "add product" picks — never carries over between opens/refreshes of this dialog
+    editing = null;
+    draftLines = [];
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID);
-    const excludeCodes = lines.map(l => l.obj['PRODUCT CODE']);
 
     form.innerHTML = `
       <div class="dlg-h">
@@ -1147,41 +1141,24 @@
           <tbody>${lines.length ? lines.map(l => renderLineRow(l)).join('') : `<tr><td colspan="6" class="empty" style="padding:12px;">No items on this order.</td></tr>`}</tbody>
         </table>
 
-        <div class="field" style="margin-top:12px;">
-          <label>Add product to this order</label>
-          <input type="search" id="ord_view_productSearch" placeholder="Search products by name or code..." style="margin-bottom:10px;">
-          <div id="ord_view_productPicker"></div>
-        </div>
-
         <div id="orderDlgStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
         <button type="button" class="btn danger" data-delete-order>Delete order</button>
-        <button type="button" class="btn" id="ord_view_addLinesBtn" hidden>Add 0 items to order</button>
         <button type="button" class="btn ghost" data-cancel>Close</button>
+        <button type="button" class="btn" data-edit-order>Edit order</button>
       </div>
     `;
-    renderProductPicker('ord_view_productPicker', 'ord_view_productSearch', excludeCodes, 'ord_view_addSummary');
-    const viewSearchInput = form.querySelector('#ord_view_productSearch');
-    viewSearchInput.addEventListener('input', () => renderProductPicker('ord_view_productPicker', 'ord_view_productSearch', excludeCodes, 'ord_view_addSummary'));
 
     form.onsubmit = (e) => e.preventDefault();
     form.onchange = (e) => {
       if (e.target.id === 'ord_statusSel') handleStatusChange(order, e.target.value);
     };
-    form.oninput = (e) => {
-      const qtyInput = e.target.closest('.stepper-qty-input');
-      if (qtyInput) handleQtyInput(qtyInput.dataset.code);
-    };
-    form.addEventListener('focus', (e) => {
-      if (e.target.classList && e.target.classList.contains('stepper-qty-input')) e.target.select();
-    }, true);
+    form.oninput = null;
     form.onclick = (e) => {
       if (e.target.closest('[data-cancel]')) { guard.guardedClose(); return; }
       if (e.target.closest('[data-delete-order]')) { handleDeleteOrder(order); return; }
-      if (e.target.closest('#ord_view_addLinesBtn')) { handleAddLinesToOrder(order); return; }
-      const stepBtn = e.target.closest('[data-step]');
-      if (stepBtn) { adjustDraftQty(stepBtn.dataset.code, parseInt(stepBtn.dataset.step, 10)); return; }
+      if (e.target.closest('[data-edit-order]')) { renderNewOrderForm(order); return; }
       if (e.target.closest('#ord_allocAllBtn')) { handleAllocateAll(order); return; }
       const allocBtn = e.target.closest('[data-open-alloc]');
       if (allocBtn) { openAllocDialog(order, allocBtn.dataset.openAlloc); return; }
@@ -1365,7 +1342,7 @@
   // before `deliveryDate` (any time before it), soonest first.
   function incomingPool(code, deliveryDate) {
     const reserved = {};
-    allocationsData.forEach(({ obj: a }) => { if (a['PO LINE ID']) reserved[a['PO LINE ID']] = (reserved[a['PO LINE ID']] || 0) + (parseFloat(a['QTY ALLOCATED']) || 0); });
+    poolAllocations().forEach(({ obj: a }) => { if (a['PO LINE ID']) reserved[a['PO LINE ID']] = (reserved[a['PO LINE ID']] || 0) + (parseFloat(a['QTY ALLOCATED']) || 0); });
     const openPo = Object.fromEntries(purchaseOrders.filter(po => !po.STATUS || po.STATUS === 'Ordered').map(po => [po.ID, po]));
     return poLines.filter(l => l['PRODUCT CODE'] === code && openPo[l['PO ID']]).map(l => {
       const po = openPo[l['PO ID']];
@@ -1653,6 +1630,7 @@
   // already allocated to ANY order line — stock is a shared pool, FEFO
   // (earliest best-before first) sorted, same computation as the Dashboard
   // and Stock pages.
+  const poolAllocations = () => editing ? allocationsData.filter(a => !editing.lineIds.has(a.obj['ORDER LINE ID'])) : allocationsData;
   function computeAvailableBatches(productCode) {
     const batchMap = {};
     deliveriesData.forEach(({ obj: d }) => {
@@ -1662,7 +1640,7 @@
       batchMap[key].remaining += parseFloat(d['QTY RECEIVED']) || 0;
       if (d['BEST BEFORE DATE'] && (!batchMap[key].bbe || d['BEST BEFORE DATE'] < batchMap[key].bbe)) batchMap[key].bbe = d['BEST BEFORE DATE'];
     });
-    allocationsData.forEach(({ obj: a }) => {
+    poolAllocations().forEach(({ obj: a }) => {
       if (a['PRODUCT CODE'] !== productCode) return;
       const key = a['BATCH/LOT NUMBER'];
       if (batchMap[key]) batchMap[key].remaining -= parseFloat(a['QTY ALLOCATED']) || 0;
@@ -1694,29 +1672,6 @@
     }
   }
 
-  async function handleAddLinesToOrder(order) {
-    if (!draftLines.length) { setDlgStatus('Pick at least one product first.', 'error'); return; }
-    const cfg = await ensureAuth(setDlgStatus);
-    if (!cfg) return;
-    setDlgStatus('Adding to order...');
-    try {
-      const existingLines = await sheetsGet(cfg.spreadsheetId, 'OrderLines!A:A', token);
-      let base = existingLines.length ? existingLines : [['ID']];
-      const placed = expandDraftLines().map(l => {
-        const lineId = nextId(base, 'OL');
-        base = base.concat([[lineId]]);
-        return { ...l, lineId };
-      });
-      await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', placed.map(l => [l.lineId, order.obj.ID, l.code, l.qty, l.unit, 'New', '']), token);
-      const alloc = autoAllocate(placed, order.obj['DELIVERY DATE']);
-      if (alloc.rows.length) await appendAllocations(cfg, alloc.rows);
-      draftLines = [];
-      await refreshAfterAllocationChange(order.obj.ID);
-      if (alloc.short) setDlgStatus(`Added — ${alloc.short} line(s) short of stock. Use Replace to swap them.`, 'error');
-    } catch (err) {
-      setDlgStatus('Error: ' + err.message, 'error');
-    }
-  }
 
   // Removing a line cascades to its allocations too — an allocation without
   // an order line would be a dangling reference with no order to trace back
@@ -1843,6 +1798,8 @@
     guard.arm();
   });
   document.getElementById('reloadBtn').addEventListener('click', loadAll);
+  // Closing the dialog mid-edit ends the edit, so the stock pool counts the order again.
+  dialogEl.addEventListener('close', () => { editing = null; });
 
   window.addEventListener('load', loadAll);
 </script>

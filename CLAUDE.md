@@ -52,7 +52,8 @@ models, sheet schemas, or conventions between the two.
   allocation) doesn't fit the generic single-flat-table model. Orders,
   OrderLines and Allocations have no page of their own any more: creating
   an order (the "+ Add order" wizard), viewing it, changing its STATUS,
-  adding/removing lines, allocating stock to each line (FEFO lot picker,
+  editing it ("Edit order" reopens the New Order form filled in — see
+  below), removing lines, allocating stock to each line (FEFO lot picker,
   writes straight to Allocations), and deleting the order outright all
   happen inside one dialog on `orders.html`. Removing a line or the whole
   order cascades: it also deletes that line's/order's Allocations (and
@@ -124,6 +125,14 @@ models, sheet schemas, or conventions between the two.
   stepped in the smallest piece; on save the count is split into real cuts,
   largest first (3 × 1/16 → ⅛ + 1/16, 16 × 1/16 → the whole), each its own
   OrderLines row in pieces (`expandDraftLines()`).
+- **Editing an order:** the order view has no product picker; "Edit order"
+  reopens it in the New Order form (`renderNewOrderForm(order)`), its lines
+  as draft lines via `draftFromOrder()` (cut portions folded back into one
+  family line, allocations as picked lots). While editing, the order's own
+  allocations are left out of the stock pool (`poolAllocations()`). Saving
+  (`handleSaveEditSubmit()`) keeps every line whose quantity and lots are
+  unchanged (`draftSig()`) with its rows, allocations and weighed Cuts, and
+  replaces the rest, all in one `spreadsheets.batchUpdate`.
 - **Orders** / **OrderLines** / **Allocations** — order header (including
   `PLACED BY`, appended to Orders' headers), order lines, and stock
   allocated to each line. Stock is allocated when an order is placed (and when lines
