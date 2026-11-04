@@ -187,7 +187,8 @@ models, sheet schemas, or conventions between the two.
   ex-VAT `UnitAmount`, customer `Discount (%)` per line, VAT rate mapped to
   Xero's tax-rate names (`xeroTaxType()`). An order is only exportable once
   every piece `weighSource()` says gets weighed has a Cuts row; those lines
-  bill the actual kilos. Price is `List price £`, else the calculated list
+  bill the actual kilos. Each description ends with the line's lots and
+  best-befores, as on the delivery note (`xeroLotsText()`). Price is `List price £`, else the calculated list
   price. InvoiceNumber = order ID, so Xero skips an order already imported;
   nothing is written back to the sheet. TEST orders are left out.
 - **StockTakes** / **StockTakeLines** — a physical count session

@@ -56,7 +56,7 @@
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/cuts.js?v=1"></script>
-<script src="js/xero-export.js?v=1"></script>
+<script src="js/xero-export.js?v=2"></script>
 <script>
   let token = null;
   let weekOffset = 0;
@@ -647,7 +647,7 @@
     const week = data.orders.filter(o => o['DELIVERY DATE'] >= startIso && o['DELIVERY DATE'] <= endIso);
     const tests = week.filter(isTestOrder).length;
     xeroInvoices = week.filter(o => !isTestOrder(o))
-      .map(o => xeroInvoiceFor(o, { lines: data.lines, productByCode: data.productByCode, customerByName: data.customerByName, cutsOfLine: data.cutsOfLine }))
+      .map(o => xeroInvoiceFor(o, { lines: data.lines, productByCode: data.productByCode, customerByName: data.customerByName, cutsOfLine: data.cutsOfLine, allocations: data.allocs, deliveryByKey: data.deliveryByKey }))
       .sort((a, b) => b.ready - a.ready || a.order['DELIVERY DATE'].localeCompare(b.order['DELIVERY DATE']) || a.order.CUSTOMER.localeCompare(b.order.CUSTOMER));
     const ready = xeroInvoices.filter(i => i.ready);
     const money = n => `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
