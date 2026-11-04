@@ -5,7 +5,10 @@
 //   the headings, so none may be renamed or dropped;
 // - one row per invoice line; rows sharing an InvoiceNumber are one invoice;
 // - dates DD/MM/YYYY; Discount is a percentage without the % sign;
-// - AccountCode and TaxType must match Xero exactly (TaxType is the tax
+// - AccountCode is by customer, not product: 20003 for the Provisions shops
+//   (Customers' Price list "P2P"), 20002 for everyone else — wholesale
+//   customers and Selfridges. Every line is tracked to Department: Food;
+// - AccountCode, TaxType and tracking must match Xero exactly (TaxType is the tax
 //   rate's display name, e.g. "Zero Rated Income");
 // - an unknown InventoryItemCode creates a new inventory item, so only a
 //   product's own `Xero item code` is ever sent;
@@ -31,6 +34,11 @@ const XERO_INVOICE_HEADERS = [
   'InventoryItemCode', '*Description', '*Quantity', '*UnitAmount', 'Discount', '*AccountCode', '*TaxType',
   'TrackingName1', 'TrackingOption1', 'TrackingName2', 'TrackingOption2', 'Currency', 'BrandingTheme'
 ];
+
+const XERO_ACCOUNT_WHOLESALE = '20002';
+const XERO_ACCOUNT_SHOPS = '20003';
+const XERO_SHOP_PRICE_LIST = 'P2P';
+const XERO_TRACKING = { name: 'Department', option: 'Food' };
 
 // Xero UK's default tax rate names, keyed by how the sheet might spell them.
 const XERO_TAX_TYPES = {
@@ -87,6 +95,7 @@ function xeroInvoiceFor(order, ctx) {
   const orderLines = ctx.lines.filter(l => l['ORDER ID'] === order.ID);
   const customer = ctx.customerByName[order.CUSTOMER];
   const discount = xeroNum(customer?.['Discount (%)']);
+  const account = customer?.['Price list'] === XERO_SHOP_PRICE_LIST ? XERO_ACCOUNT_SHOPS : XERO_ACCOUNT_WHOLESALE;
 
   if (!orderLines.length) blockers.push('No lines');
   if (!order['DELIVERY DATE']) blockers.push('No delivery date');
@@ -144,7 +153,6 @@ function xeroInvoiceFor(order, ctx) {
 
     const price = xeroUnitPrice(p);
     if (!price) warnings.push(`${name}: no price — fill it in on the draft in Xero`);
-    if (!p['Xero account code']) warnings.push(`${name}: no Xero account code`);
     if (!p['VAT rate']) warnings.push(`${name}: no VAT rate`);
     const replaces = l.REPLACES ? ` (replaces ${ctx.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES})` : '';
     parts.forEach(x => {
@@ -156,7 +164,7 @@ function xeroInvoiceFor(order, ctx) {
         qty: xeroRound(x.qty, 3),
         price: xeroRound(price, 2),
         discount,
-        account: p['Xero account code'] || '',
+        account,
         tax: xeroTaxType(p['VAT rate'])
       });
     });
@@ -188,6 +196,8 @@ function xeroCsvRows(invoices) {
       r.Discount = x.discount ? x.discount : '';
       r['*AccountCode'] = x.account;
       r['*TaxType'] = x.tax;
+      r.TrackingName1 = XERO_TRACKING.name;
+      r.TrackingOption1 = XERO_TRACKING.option;
       rows.push(XERO_INVOICE_HEADERS.map(h => r[h]));
     });
   });

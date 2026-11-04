@@ -185,7 +185,9 @@ models, sheet schemas, or conventions between the two.
   `lists.html`): the week's orders, by delivery date, as a Xero sales-invoice
   import CSV — Xero's template headers exactly, one row per line, DD/MM/YYYY,
   ex-VAT `UnitAmount`, customer `Discount (%)` per line, VAT rate mapped to
-  Xero's tax-rate names (`xeroTaxType()`). An order is only exportable once
+  Xero's tax-rate names (`xeroTaxType()`). Account code is by customer:
+  20003 for the shops (Customers' Price list "P2P"), 20002 for wholesale
+  and Selfridges; every line is tracked Department: Food. An order is only exportable once
   every piece `weighSource()` says gets weighed has a Cuts row; those lines
   bill the actual kilos. A line from several lots becomes one invoice line
   per lot, its description ending with that lot and best-before. Price is `List price £`, else the calculated list
