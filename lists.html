@@ -56,7 +56,7 @@
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/cuts.js?v=1"></script>
-<script src="js/xero-export.js?v=4"></script>
+<script src="js/xero-export.js?v=5"></script>
 <script>
   let token = null;
   let weekOffset = 0;
@@ -579,6 +579,7 @@
           <div class="dn-meta">
             <div><div class="dn-k">Deliver to</div><div class="dn-v"><strong>${escapeHtml(o.CUSTOMER)}</strong><br>${escapeHtml(cust['Delivery address'] || '')}</div></div>
             <div><div class="dn-k">Order</div><div class="dn-v">${escapeHtml(o.ID)}</div>
+              ${o['CUSTOMER REF'] ? `<div class="dn-k">Your ref</div><div class="dn-v">${escapeHtml(o['CUSTOMER REF'])}</div>` : ''}
               <div class="dn-k">Delivery date</div><div class="dn-v">${escapeHtml(fmtDateShort(o['DELIVERY DATE']))}</div>
               ${o.BOXES ? `<div class="dn-k">Boxes</div><div class="dn-v">${escapeHtml(o.BOXES)}</div>` : ''}
               ${o._drop ? `<div class="dn-k">Drop</div><div class="dn-v">${o._drop}</div>` : ''}</div>

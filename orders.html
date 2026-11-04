@@ -82,6 +82,7 @@
   // (poolAllocations), so its lots show as free to re-pick.
   let editing = null;
   let lineHeaders = [];      // OrderLines' header row — where REPLACES lives
+  let orderHeaders = [];     // Orders' header row — where CUSTOMER REF lives (appended later, so Setup may not have added it yet)
   let dirtyCheck = null;     // set per dialog mode; attachDiscardGuard calls it via a stable wrapper
 
   const statusEl = document.getElementById('status');
@@ -200,6 +201,7 @@
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       lineHeaders = lineRows[0] || [];
+      orderHeaders = orderRows[0] || [];
       allocationsData = toRowObjects(allocRows);
       cutsData = (await cutsP).rows;
       deliveriesData = toRowObjects(deliveryRows);
@@ -358,7 +360,11 @@
             </div>
             <div class="no-list-h"><label>Order</label><span id="ord_orderSummary" class="mono"></span></div>
             <div id="ord_draftList" class="no-list"></div>
-            <div class="field" style="margin-top:12px;">
+            <div class="field" style="margin-top:12px; max-width:320px;">
+              <label for="ord_customerRef">Customer ref</label>
+              <input type="text" id="ord_customerRef" value="${escapeHtml(o?.['CUSTOMER REF'] || '')}" placeholder="Their PO number, if they gave one" autocomplete="off">
+            </div>
+            <div class="field">
               <label>Notes</label>
               <textarea id="ord_notes" placeholder="Optional">${escapeHtml(o?.NOTES || '')}</textarea>
             </div>
@@ -390,10 +396,10 @@
     renderDeliveryPicker();
 
     const snapshot = () => JSON.stringify([customerSel.value, form.querySelector('#ord_orderDate').value, form.querySelector('#ord_placedBy').value,
-      form.querySelector('#ord_notes').value, form.querySelector('#ord_deliveryDate').value, draftLines.map(l => [l.code, draftSig(l)])]);
+      form.querySelector('#ord_notes').value, form.querySelector('#ord_customerRef').value, form.querySelector('#ord_deliveryDate').value, draftLines.map(l => [l.code, draftSig(l)])]);
     const initial = snapshot();
     dirtyCheck = o ? () => snapshot() !== initial
-      : () => !!customerSel.value || draftLines.length > 0 || !!form.querySelector('#ord_notes').value.trim();
+      : () => !!customerSel.value || draftLines.length > 0 || !!form.querySelector('#ord_notes').value.trim() || !!form.querySelector('#ord_customerRef').value.trim();
     customerSel.addEventListener('change', renderDeliveryPicker);
     customerSel.addEventListener('change', renderOrderTotal);
 
@@ -971,6 +977,12 @@
     return Math.round(n * 1000) / 1000;
   }
 
+  // CUSTOMER REF: the customer's own reference for an order (their PO
+  // number), printed on the delivery note and used as the Xero invoice's
+  // Reference. Appended to Orders after launch, so Setup may need re-running.
+  const refCol = () => orderHeaders.indexOf('CUSTOMER REF');
+  const REF_SETUP_MSG = 'Re-run Setup first — it adds the CUSTOMER REF column to Orders.';
+
   async function handleCreateOrderSubmit(e) {
     e.preventDefault();
     const cfg = await ensureAuth(setDlgStatus);
@@ -984,6 +996,8 @@
     if (!deliveryDate) { setDlgStatus('Pick a delivery week.', 'error'); return; }
     if (!placedBy) { setDlgStatus('Enter who placed this order.', 'error'); return; }
     if (!draftLines.length) { setDlgStatus('Add at least one product.', 'error'); return; }
+    const customerRef = form.querySelector('#ord_customerRef').value.trim();
+    if (customerRef && refCol() < 0) { setDlgStatus(REF_SETUP_MSG, 'error'); return; }
 
     setDlgStatus('Placing order...');
     try {
@@ -1002,7 +1016,9 @@
       // Stock is allocated as the order is placed, so availability always
       // reflects every order not yet dispatched.
       const alloc = autoAllocate(placed, deliveryDate);
-      await sheetsAppend(cfg.spreadsheetId, 'Orders!A:G', [orderId, orderDate, customer, deliveryDate, alloc.short ? 'New' : 'Allocated', notes, placedBy], token);
+      const orderRow = [orderId, orderDate, customer, deliveryDate, alloc.short ? 'New' : 'Allocated', notes, placedBy];
+      if (customerRef) { while (orderRow.length < refCol()) orderRow.push(''); orderRow[refCol()] = customerRef; }
+      await sheetsAppend(cfg.spreadsheetId, 'Orders!A:Z', orderRow, token);
       await sheetsAppendRows(cfg.spreadsheetId, 'OrderLines!A:G', placed.map(l => [l.lineId, orderId, l.code, l.qty, l.unit, 'New', '']), token);
       if (alloc.rows.length) await appendAllocations(cfg, alloc.rows);
 
@@ -1034,6 +1050,8 @@
     if (!deliveryDate) { setDlgStatus('Pick a delivery week.', 'error'); return; }
     if (!placedBy) { setDlgStatus('Enter who placed this order.', 'error'); return; }
     if (!draftLines.length) { setDlgStatus('An order needs at least one product — use Delete order to remove it.', 'error'); return; }
+    const customerRef = form.querySelector('#ord_customerRef').value.trim();
+    if (customerRef && refCol() < 0) { setDlgStatus(REF_SETUP_MSG, 'error'); return; }
 
     const kept = draftLines.filter(l => l.lineIds && draftSig(l) === l.sig);
     const keptIds = new Set(kept.flatMap(l => l.lineIds));
@@ -1092,7 +1110,7 @@
       });
 
       // Orders columns: B DATE, C CUSTOMER, D DELIVERY DATE, F NOTES, G PLACED BY.
-      const requests = [[1, orderDate], [2, customer], [3, deliveryDate], [5, notes], [6, placedBy]]
+      const requests = [[1, orderDate], [2, customer], [3, deliveryDate], [5, notes], [6, placedBy], ...(refCol() >= 0 ? [[refCol(), customerRef]] : [])]
         .map(([col, v]) => updateCellRequest(ordersSid, order.rowNumber, col, v));
       if (lineRows.length) requests.push(appendRowsRequest(linesSid, lineRows));
       if (allocRows.length) requests.push(appendRowsRequest(allocsSid, allocRows));
@@ -1129,7 +1147,7 @@
       <div class="dlg-h">
         <div>
           <div class="ttl">${escapeHtml(order.obj.ID)} — ${escapeHtml(order.obj.CUSTOMER)}</div>
-          <div class="subtitle">Placed by ${escapeHtml(order.obj['PLACED BY']) || 'unknown'} on ${escapeHtml(fmtDateShort(order.obj.DATE))} · delivery ${escapeHtml(fmtDateShort(order.obj['DELIVERY DATE'])) || 'not set'}.</div>
+          <div class="subtitle">Placed by ${escapeHtml(order.obj['PLACED BY']) || 'unknown'} on ${escapeHtml(fmtDateShort(order.obj.DATE))} · delivery ${escapeHtml(fmtDateShort(order.obj['DELIVERY DATE'])) || 'not set'}${order.obj['CUSTOMER REF'] ? ` · customer ref ${escapeHtml(order.obj['CUSTOMER REF'])}` : ''}.</div>
         </div>
         <button type="button" class="dlg-close" data-cancel aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>

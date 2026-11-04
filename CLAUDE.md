@@ -134,7 +134,8 @@ models, sheet schemas, or conventions between the two.
   unchanged (`draftSig()`) with its rows, allocations and weighed Cuts, and
   replaces the rest, all in one `spreadsheets.batchUpdate`.
 - **Orders** / **OrderLines** / **Allocations** — order header (including
-  `PLACED BY`, appended to Orders' headers), order lines, and stock
+  `PLACED BY` and the customer's own `CUSTOMER REF`, both appended to Orders'
+  headers), order lines, and stock
   allocated to each line. Stock is allocated when an order is placed (and when lines
   are added): `autoAllocate()` in `orders.html` takes each non-cut line FEFO
   from free stock, skipping lots past their best-before on the delivery
@@ -191,7 +192,8 @@ models, sheet schemas, or conventions between the two.
   every piece `weighSource()` says gets weighed has a Cuts row; those lines
   bill the actual kilos. A line from several lots becomes one invoice line
   per lot, its description ending with that lot and best-before. Price is `List price £`, else the calculated list
-  price. InvoiceNumber = order ID, so Xero skips an order already imported;
+  price. Reference = the order's `CUSTOMER REF` (the customer's PO number,
+  typed in New / Edit order), else the order ID. InvoiceNumber = order ID, so Xero skips an order already imported;
   nothing is written back to the sheet. TEST orders are left out.
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's

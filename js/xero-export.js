@@ -14,6 +14,8 @@
 //   product's own `Xero item code` is ever sent;
 // - an InvoiceNumber already in Xero is skipped, so the order ID is used as
 //   the invoice number and exporting the same week twice is harmless;
+//   Reference is the customer's own ref for the order (Orders' CUSTOMER
+//   REF) when they gave one, else the order ID;
 // - invoices land as drafts. UnitAmount here is ex VAT: pick "Tax exclusive"
 //   when Xero asks at import.
 //
@@ -186,7 +188,7 @@ function xeroCsvRows(invoices) {
       const r = Object.fromEntries(XERO_INVOICE_HEADERS.map(h => [h, '']));
       r['*ContactName'] = inv.order.CUSTOMER;
       r['*InvoiceNumber'] = inv.order.ID;
-      r.Reference = inv.order.ID;
+      r.Reference = inv.order['CUSTOMER REF'] || inv.order.ID;
       r['*InvoiceDate'] = xeroDate(date);
       r['*DueDate'] = due;
       r.InventoryItemCode = x.itemCode;
