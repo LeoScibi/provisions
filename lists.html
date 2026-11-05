@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Provisions — Lists</title>
+<title>Provisions — Packing</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=45">
+<link rel="stylesheet" href="css/style.css?v=46">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -18,7 +18,7 @@
 <header class="topbar no-print" id="topbar"></header>
 <main>
   <div class="no-print">
-    <h2>Cutting &amp; packing lists</h2>
+    <h2>Packing</h2>
   </div>
   <div id="signedOutNotice" class="note no-print" style="display:none;">
     Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
@@ -31,17 +31,16 @@
         <button type="button" class="btn ghost sm" id="nextWeekBtn" aria-label="Next week">&rarr;</button>
         <button type="button" class="btn ghost sm" id="thisWeekBtn">This week</button>
       </div>
-      <a class="btn sm" href="cutting.html">Weigh cuts</a>
       <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
-      <button type="button" class="btn ghost sm" id="printCutBtn">Print cutting list</button>
       <button type="button" class="btn ghost sm" id="printPackBtn">Print packing slips</button>
       <button type="button" class="btn ghost sm" id="printNotesBtn">Print delivery notes</button>
       <button type="button" class="btn ghost sm" id="printLabelsBtn">Print box labels</button>
       <button type="button" class="btn ghost sm" id="xeroBtn">Export to Xero</button>
-      <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:Archivo,sans-serif; font-size:13px; color:var(--steel); font-weight:400; letter-spacing:normal;">
+      <label class="toggle-label">
         <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
       </label>
     </div>
+    <div id="dayChips" class="day-chips no-print"></div>
     <div id="listsOut"></div>
     <div id="printOut"></div>
     <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
@@ -52,17 +51,17 @@
 </dialog>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=10"></script>
+<script src="js/shell.js?v=11"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/xero-export.js?v=5"></script>
+<script src="js/lists-data.js?v=1"></script>
 <script>
+  // Packing: one slip per order in the order they're packed (Out of London,
+  // then each day's London run in truck order), box counts, delivery notes,
+  // box labels and the Xero export. Data and the week picker: js/lists-data.js.
   let token = null;
-  let weekOffset = 0;
-  // Everything loadLists() read, kept so reordering drops re-renders
-  // without another round trip to the sheet.
-  let data = null;
   let saveTimer = null;
 
   function setStatus(msg, kind) {
@@ -79,62 +78,6 @@
     return ok;
   }
 
-  function toObjects(rows) {
-    if (!rows.length) return [];
-    const [head, ...rest] = rows;
-    return rest.map(r => {
-      const o = {};
-      head.forEach((h, i) => { o[h] = r[i] ?? ''; });
-      return o;
-    });
-  }
-
-  // ---- week helpers — weeks run Monday–Sunday; offset 0 = the week
-  // containing today. Orders are picked by their DELIVERY DATE. ----
-
-  function mondayOf(date) {
-    const d = new Date(date);
-    const day = d.getDay(); // 0 Sun .. 6 Sat
-    d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }
-
-  function weekRange(offset) {
-    const start = mondayOf(new Date());
-    start.setDate(start.getDate() + offset * 7);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    return { start, end };
-  }
-
-  // Local-date ISO string (not toISOString, which converts to UTC and can
-  // shift the date near midnight in a +ve timezone like BST).
-  function isoDate(d) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  }
-
-  function fmtWeekRange(start, end) {
-    const sameMonth = start.getMonth() === end.getMonth();
-    const s = start.toLocaleDateString('en-GB', sameMonth ? { day: 'numeric' } : { day: 'numeric', month: 'short' });
-    const e = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    return `${s}–${e}`;
-  }
-
-  function fmtDateShort(iso) {
-    if (!iso) return '';
-    const d = new Date(iso + 'T00:00:00');
-    if (isNaN(d)) return iso;
-    return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-  }
-
-  function renderWeekLabel() {
-    const { start, end } = weekRange(weekOffset);
-    const prefix = weekOffset === 0 ? 'This week' : weekOffset === 1 ? 'Next week' : weekOffset === -1 ? 'Last week' : 'Week of';
-    document.getElementById('weekLabel').textContent = `${prefix} · ${fmtWeekRange(start, end)}`;
-    document.getElementById('thisWeekBtn').style.display = weekOffset === 0 ? 'none' : '';
-  }
-
   async function loadLists() {
     if (!requireAuth()) return;
     // Don't drop a truck-order change still waiting to save.
@@ -143,270 +86,48 @@
     renderWeekLabel();
     setStatus('Loading...');
     try {
-      const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
-      const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
-      const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
-        sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
-        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token)
-      ]);
-
-      const productByCode = {};
-      const products = toObjects(productRows);
-      products.forEach(p => { productByCode[p['Product code']] = p; });
-      registerProducts(products);
-      registerProductGroups(await groupsP);
-
-      const deliveryByKey = {};
-      toObjects(deliveryRows).forEach(d => {
-        deliveryByKey[`${d['PRODUCT CODE']} ${d['BATCH/LOT NUMBER']}`] = d;
-      });
-
-      const customerByName = {};
-      toObjects(customerRows).forEach(c => { customerByName[c['Customer name (as in Xero)']] = c; });
-
-      // DROP ORDER and BOXES were appended to Orders after launch — until
-      // Setup has been re-run those columns don't exist and can't be saved.
-      const dropIdx = (orderRows[0] || []).indexOf('DROP ORDER');
-      const boxesIdx = (orderRows[0] || []).indexOf('BOXES');
-
-      data = {
-        orders: toObjects(orderRows).map((o, i) => ({ ...o, rowNumber: i + 2 })),
-        lines: toObjects(lineRows),
-        allocs: toObjects(allocRows),
-        productByCode, deliveryByKey, customerByName,
-        cutsOfLine: cutsByLine((await cutsP).rows),
-        // PO line → its PO, for lines held by a reservation on stock still arriving.
-        poOfLine: (() => {
-          const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
-          return Object.fromEntries(toObjects(polRows).map(l => [l.ID, pos[l['PO ID']] || { ID: l['PO ID'] }]));
-        })(),
-        dropCol: dropIdx >= 0 ? colLetter(dropIdx + 1) : null,
-        boxesCol: boxesIdx >= 0 ? colLetter(boxesIdx + 1) : null
-      };
+      data = await loadListsData(cfg.spreadsheetId, token);
       renderLists();
     } catch (err) {
       setStatus('Error loading: ' + err.message, 'error');
     }
   }
 
-  // ---- building the lists ----
-
-  // "Comté Petite 10/14M — 1/4 wheel 9kg" → cheese "Comté Petite 10/14M",
-  // portion "1/4 wheel 9kg". Product names use an em dash for the cut.
-  function splitPortionName(name) {
-    const i = name.indexOf(' — ');
-    return i < 0 ? { cheese: name, portion: '' } : { cheese: name.slice(0, i), portion: name.slice(i + 3) };
-  }
-
-  function zoneOf(order) {
-    const c = data.customerByName[order.CUSTOMER];
-    return (c && c['Delivery zone']) || '';
-  }
-
-  function weekOrders() {
-    const { start, end } = weekRange(weekOffset);
-    const startIso = isoDate(start), endIso = isoDate(end);
-    const showAll = document.getElementById('showAllToggle').checked;
-    const open = data.orders.filter(o => showAll || o.STATUS !== 'Dispatched');
-    return {
-      inWeek: open.filter(o => o['DELIVERY DATE'] >= startIso && o['DELIVERY DATE'] <= endIso),
-      undated: open.filter(o => !o['DELIVERY DATE'])
-    };
-  }
-
-  // London drops in truck order: saved DROP ORDER first (1 = first drop),
-  // then anything not placed yet, alphabetically, at the end.
-  function sortByDrop(orders) {
-    return orders.slice().sort((a, b) => {
-      const da = parseInt(a['DROP ORDER'], 10), db = parseInt(b['DROP ORDER'], 10);
-      const ha = !isNaN(da), hb = !isNaN(db);
-      if (ha && hb && da !== db) return da - db;
-      if (ha !== hb) return ha ? -1 : 1;
-      return a.CUSTOMER.localeCompare(b.CUSTOMER);
-    });
-  }
-
-  // Cheese-centric: every portion cut from the same wheel sits under one
-  // heading, so the cutter opens each wheel once and labels each piece
-  // with its customer. Only cut-to-order lines (products with a
-  // "Cut from (code)") need cutting — whole items are just picked.
-  function buildCutGroups(orders) {
-    const groups = {};
-    orders.forEach(order => {
-      data.lines.filter(l => l['ORDER ID'] === order.ID).forEach(l => {
-        const prod = data.productByCode[l['PRODUCT CODE']];
-        if (!prod || !prod['Cut from (code)']) return;
-        const parentCode = prod['Cut from (code)'];
-        const parent = data.productByCode[parentCode];
-        const { cheese, portion } = splitPortionName(prod['Product name']);
-        if (!groups[parentCode]) {
-          groups[parentCode] = {
-            code: parentCode,
-            name: parent ? splitPortionName(parent['Product name']).cheese : cheese,
-            rows: []
-          };
-        }
-        const qty = parseFloat(l['QTY ORDERED']) || 0;
-        const nominal = parseFloat(prod['Nominal weight (kg)']) || 0;
-        groups[parentCode].rows.push({
-          product: prod,
-          portion: portion || prod['Product name'],
-          code: prod['Product code'],
-          qty, unit: l.UNIT,
-          weighed: sumCutWeight(data.cutsOfLine[l.ID]),
-          kg: l.UNIT === 'kg' ? qty : qty * nominal,
-          customer: order.CUSTOMER,
-          zone: zoneOf(order),
-          orderId: order.ID,
-          cutLife: prod['Cut shelf life (days)'],
-          // The wheel lot(s) this piece was allocated from, when it has been.
-          lots: [...new Set(data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
-            ? `awaiting ${(data.poOfLine[a['PO LINE ID']] || {}).ID || 'PO'}`
-            : a['BATCH/LOT NUMBER']))]
-        });
-      });
-    });
-    const zoneRank = z => z === 'Out of London' ? 0 : z === 'London' ? 1 : 2;
-    return Object.values(groups)
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(g => {
-        g.rows.sort((a, b) => zoneRank(a.zone) - zoneRank(b.zone) || a.customer.localeCompare(b.customer));
-        return g;
-      });
-  }
-
-  function packLines(order) {
-    return data.lines.filter(l => l['ORDER ID'] === order.ID).map(l => {
-      const prod = data.productByCode[l['PRODUCT CODE']];
-      const ordered = parseFloat(l['QTY ORDERED']) || 0;
-      const isCut = !!(prod && prod['Cut from (code)']);
-      const lots = data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => {
-        if (a['PO LINE ID']) {
-          const po = data.poOfLine[a['PO LINE ID']] || {};
-          return { awaiting: po.ID || 'PO', due: po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '', qty: parseFloat(a['QTY ALLOCATED']) || 0 };
-        }
-        const del = data.deliveryByKey[`${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`];
-        return { lot: a['BATCH/LOT NUMBER'], qty: parseFloat(a['QTY ALLOCATED']) || 0, bbe: del ? del['BEST BEFORE DATE'] : '' };
-      }).reduce((out, x) => {
-        // One entry per lot (or PO), however many allocation rows it took.
-        const same = out.find(y => (y.lot || '') === (x.lot || '') && (y.awaiting || '') === (x.awaiting || ''));
-        if (same) same.qty += x.qty; else out.push(x);
-        return out;
-      }, []);
-      const allocated = lots.reduce((s, x) => s + x.qty, 0);
-      return {
-        product: prod,
-        code: l['PRODUCT CODE'],
-        name: prod ? prod['Product name'] : l['PRODUCT CODE'],
-        qty: ordered, unit: l.UNIT,
-        isCut, lots,
-        weighed: sumCutWeight(data.cutsOfLine[l.ID]),
-        short: !isCut && allocated + 0.0001 < ordered,
-        // Set when the line was swapped for another product (orders.html → Replace).
-        replaces: l.REPLACES ? (data.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES) : ''
-      };
-    });
-  }
-
   function renderLists() {
     const out = document.getElementById('listsOut');
     const { inWeek, undated } = weekOrders();
-    const orderLink = (id) => `<a href="orders.html?open=${encodeURIComponent(id)}">${escapeHtml(id)}</a>`;
-
-    const undatedNote = undated.length ? `
-      <div class="note no-print">
-        <strong>${undated.length} open order(s) have no delivery date</strong> and won't show on any week: ${undated.map(o => `${orderLink(o.ID)} (${escapeHtml(o.CUSTOMER)})`).join(', ')}.
-      </div>` : '';
 
     if (!inWeek.length) {
-      out.innerHTML = undatedNote + `<div class="empty" style="padding:24px;">No orders for delivery this week. Use the arrows to look at another week, or create one on the <a href="orders.html">Orders</a> page.</div>`;
+      out.innerHTML = listNotesHtml(inWeek, undated) + `<div class="empty" style="padding:24px;">No orders for delivery this week. Use the arrows to look at another week, or create one on the <a href="orders.html">Orders</a> page.</div>`;
       setStatus('');
       return;
     }
 
     const { outside, london, noZone } = packingGroups(inWeek);
-
-    const cutGroups = buildCutGroups(inWeek);
-    const shortCount = inWeek.reduce((n, o) => n + packLines(o).filter(l => l.short).length, 0);
+    // One truck run per delivery date, each in its own drop order.
+    const runs = {};
+    london.forEach(o => { (runs[o['DELIVERY DATE']] = runs[o['DELIVERY DATE']] || []).push(o); });
+    const runDates = Object.keys(runs).sort();
 
     out.innerHTML = `
-      ${undatedNote}
-      ${shortCount ? `
-        <div class="note no-print">
-          <strong>${shortCount} line(s) still need stock allocated</strong> — they're flagged on the packing slips below. Allocate them on the <a href="orders.html" style="color:inherit; text-decoration:underline;">Orders</a> page.
-        </div>` : ''}
-
-      <section id="cutSection" class="list-section">
-        <h3 class="list-h">Cutting list <span class="print-only muted" style="font-weight:400;">· ${escapeHtml(document.getElementById('weekLabel').textContent)}</span></h3>
-        ${cutGroups.length ? cutGroups.map(g => {
-          const kg = g.rows.reduce((s, r) => s + r.kg, 0);
-          const pieces = g.rows.reduce((s, r) => s + (r.unit === 'kg' ? 1 : r.qty), 0);
-          return `
-          <div class="panel cut-group">
-            <div class="panel-h">
-              <h3>${escapeHtml(g.name)}</h3>
-              <span class="code">${escapeHtml(g.code)}</span>
-              <span class="muted" style="margin-left:auto; font-size:13px;">${pieces} piece(s) to cut · ≈ ${kg.toFixed(1)} kg</span>
-            </div>
-            <div class="scroll" style="overflow-x:auto;">
-              <table><thead><tr><th class="tick-col"></th><th>Portion</th><th class="num">Qty</th><th>Label for</th><th>Zone</th><th>Wheel lot</th><th>Life after cut</th><th class="no-print">Order</th></tr></thead>
-              <tbody>${g.rows.map(r => `
-                <tr>
-                  <td class="tick-col"><span class="tick-box"></span></td>
-                  <td>${productCell(r.product, `<strong>${escapeHtml(r.portion)}</strong><br><span class="code">${escapeHtml(r.code)}</span>`)}</td>
-                  <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}${r.weighed ? `<br><strong>${r.weighed.toFixed(2)} kg</strong>` : ''}</td>
-                  <td>${escapeHtml(r.customer)}</td>
-                  <td>${zoneTag(r.zone)}</td>
-                  <td class="code">${r.lots.length ? r.lots.map(escapeHtml).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
-                  <td>${r.cutLife ? r.cutLife + ' day(s)' : '—'}</td>
-                  <td class="no-print">${orderLink(r.orderId)}</td>
-                </tr>`).join('')}
-              </tbody></table>
-            </div>
-          </div>`;
-        }).join('') : `<p class="muted" style="font-size:13px; margin-bottom:24px;">Nothing to cut this week — no cut-to-order portions on these orders.</p>`}
-      </section>
-
+      ${listNotesHtml(inWeek, undated)}
       <section id="packSection" class="list-section">
-        <h3 class="list-h">Packing slips</h3>
+        <h3 class="list-h">Packing slips <span class="print-only muted" style="font-weight:400;">· ${escapeHtml(periodLabel())}</span></h3>
         ${outside.length ? `
           <h4 class="zone-h">Out of London <span class="muted">· courier collection, prepare first · ${outside.length} order(s)</span></h4>
           ${outside.map(o => slipHtml(o, null)).join('')}` : ''}
-        ${london.length ? `
-          <h4 class="zone-h">London <span class="muted">· in truck order · ${london.length} drop(s)</span></h4>
-          ${data.dropCol ? `<p class="muted no-print" style="font-size:12.5px; margin:-4px 0 12px;">Drag the slips (or use the arrows) into the order they go on the truck — it saves automatically.</p>`
-            : `<div class="note no-print">Re-run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> to add the DROP ORDER column — until then you can reorder drops for printing, but the order won't be saved.</div>`}
-          <div id="londonDrops">${london.map((o, i) => slipHtml(o, i + 1)).join('')}</div>` : ''}
+        ${london.length && !data.dropCol ? `<div class="note no-print">Re-run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> to add the DROP ORDER column — until then you can reorder drops for printing, but the order won't be saved.</div>` : ''}
+        ${runDates.map((day, r) => `
+          <h4 class="zone-h">London${runDates.length > 1 || dayFilter ? ' · ' + escapeHtml(fmtDateShort(day)) : ''} <span class="muted">· in truck order · ${runs[day].length} drop(s)</span></h4>
+          ${r === 0 && data.dropCol ? `<p class="muted no-print" style="font-size:12.5px; margin:-4px 0 12px;">Drag the slips (or use the arrows) into the order they go on the truck — it saves automatically.</p>` : ''}
+          <div class="london-drops" data-run="${escapeHtml(day)}">${runs[day].map((o, i) => slipHtml(o, i + 1)).join('')}</div>`).join('')}
         ${noZone.length ? `
           <h4 class="zone-h">No delivery zone <span class="muted">· set the customer's zone on the Customers page · ${noZone.length} order(s)</span></h4>
           ${noZone.map(o => slipHtml(o, null)).join('')}` : ''}
       </section>
     `;
     wireDrops();
-    setStatus(`${inWeek.length} order(s) for delivery ${fmtWeekRange(weekRange(weekOffset).start, weekRange(weekOffset).end)}.`, 'ok');
-  }
-
-  // The order slips are packed in: Out of London first (courier), then
-  // London in truck order, then anything with no zone. Delivery notes and
-  // box labels print in the same order.
-  function packingGroups(orders) {
-    return {
-      outside: orders.filter(o => zoneOf(o) === 'Out of London').sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER)),
-      london: sortByDrop(orders.filter(o => zoneOf(o) === 'London')),
-      noZone: orders.filter(o => !['London', 'Out of London'].includes(zoneOf(o))).sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER))
-    };
-  }
-
-  function zoneTag(zone) {
-    if (zone === 'London') return '<span class="tag t-chill">London</span>';
-    if (zone === 'Out of London') return '<span class="tag t-ldo">Out of London</span>';
-    return '<span class="tag t-warn">No zone</span>';
+    setStatus(`${inWeek.length} order(s) for delivery ${dayFilter ? fmtDateShort(dayFilter) : fmtWeekRange(weekRange(weekOffset).start, weekRange(weekOffset).end)}.`, 'ok');
   }
 
   // One compact block per order: a single header line (drop, customer,
@@ -453,8 +174,10 @@
   // ---- truck order: drag (mouse) or arrows (touch/keyboard) ----
 
   function wireDrops() {
-    const box = document.getElementById('londonDrops');
-    if (!box) return;
+    document.querySelectorAll('.london-drops').forEach(wireRun);
+  }
+
+  function wireRun(box) {
     let dragging = null;
     box.querySelectorAll('.slip').forEach(slip => {
       slip.addEventListener('dragstart', e => {
@@ -465,7 +188,7 @@
       slip.addEventListener('dragend', () => {
         slip.classList.remove('dragging');
         dragging = null;
-        applyDomOrder();
+        applyDomOrder(box);
       });
     });
     box.addEventListener('dragover', e => {
@@ -483,14 +206,14 @@
       const slip = btn.closest('.slip');
       if (btn.dataset.move === '-1' && slip.previousElementSibling) box.insertBefore(slip, slip.previousElementSibling);
       if (btn.dataset.move === '1' && slip.nextElementSibling) box.insertBefore(slip.nextElementSibling, slip);
-      applyDomOrder(slip.dataset.orderId);
+      applyDomOrder(box, slip.dataset.orderId);
     });
   }
 
-  // Renumbers the London orders from the slips' on-screen order, re-renders
-  // and queues the save. `focusId` keeps keyboard focus on the moved slip.
-  function applyDomOrder(focusId) {
-    const ids = [...document.querySelectorAll('#londonDrops .slip')].map(s => s.dataset.orderId);
+  // Renumbers one day's London run from its slips' on-screen order,
+  // re-renders and queues the save. `focusId` keeps the moved slip in view.
+  function applyDomOrder(box, focusId) {
+    const ids = [...box.querySelectorAll('.slip')].map(s => s.dataset.orderId);
     let changed = false;
     ids.forEach((id, i) => {
       const o = data.orders.find(x => x.ID === id);
@@ -499,7 +222,7 @@
     if (!changed) return;
     renderLists();
     if (focusId) {
-      const slip = document.querySelector(`#londonDrops .slip[data-order-id="${CSS.escape(focusId)}"]`);
+      const slip = document.querySelector(`.london-drops .slip[data-order-id="${CSS.escape(focusId)}"]`);
       slip?.scrollIntoView({ block: 'nearest' });
     }
     if (!data.dropCol) return;
@@ -558,11 +281,6 @@
   });
 
   // ---- delivery notes and box labels ----
-
-  function weekPackingOrder() {
-    const { outside, london, noZone } = packingGroups(weekOrders().inWeek);
-    return [...outside, ...london.map((o, i) => ({ ...o, _drop: i + 1 })), ...noZone];
-  }
 
   // One A4 page per order: who it's for, what's in it (no prices), lots and
   // best-befores for traceability, and a line for the customer to sign.
@@ -625,7 +343,7 @@
 
   function printOnly(which) {
     if (which === 'notes' || which === 'labels') {
-      const orders = weekPackingOrder();
+      const orders = packingOrder(weekOrders().inWeek);
       if (!orders.length) { showToast('No orders this week to print.', 'error'); return; }
       if (which === 'labels') {
         const missing = orders.filter(o => !(parseInt(o.BOXES, 10) > 0)).length;
@@ -708,18 +426,8 @@
     dlg.showModal();
   }
 
-  function shiftWeek(delta) {
-    weekOffset = delta === 0 ? 0 : weekOffset + delta;
-    renderWeekLabel();
-    if (data) renderLists();
-  }
-
-  document.getElementById('prevWeekBtn').addEventListener('click', () => shiftWeek(-1));
-  document.getElementById('nextWeekBtn').addEventListener('click', () => shiftWeek(1));
-  document.getElementById('thisWeekBtn').addEventListener('click', () => shiftWeek(0));
   document.getElementById('reloadBtn').addEventListener('click', loadLists);
-  document.getElementById('showAllToggle').addEventListener('change', () => { if (data) renderLists(); });
-  document.getElementById('printCutBtn').addEventListener('click', () => printOnly('cut'));
+  initWeekPicker(renderLists);
   document.getElementById('printPackBtn').addEventListener('click', () => printOnly('pack'));
   document.getElementById('printNotesBtn').addEventListener('click', () => printOnly('notes'));
   document.getElementById('printLabelsBtn').addEventListener('click', () => printOnly('labels'));

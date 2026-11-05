@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Cutting list</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <div class="no-print">
+    <h2>Cutting list</h2>
+  </div>
+  <div id="signedOutNotice" class="note no-print" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="listsCard" style="display:none;">
+    <div class="toolbar no-print" style="margin-bottom:16px;">
+      <div class="week-nav">
+        <button type="button" class="btn ghost sm" id="prevWeekBtn" aria-label="Previous week">&larr;</button>
+        <span id="weekLabel" class="week-label"></span>
+        <button type="button" class="btn ghost sm" id="nextWeekBtn" aria-label="Next week">&rarr;</button>
+        <button type="button" class="btn ghost sm" id="thisWeekBtn">This week</button>
+      </div>
+      <a class="btn sm" href="cutting.html">Weigh cuts</a>
+      <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
+      <button type="button" class="btn ghost sm" id="printBtn">Print cutting list</button>
+      <label class="toggle-label">
+        <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
+      </label>
+    </div>
+    <div id="dayChips" class="day-chips no-print"></div>
+    <div id="listsOut"></div>
+    <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=11"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/lists-data.js?v=1"></script>
+<script>
+  // Cutting list: every cut-to-order portion for the week (or one day),
+  // wheel by wheel, so the cutter opens each wheel once and labels each
+  // piece with its customer. Weighing happens on cutting.html.
+  let token = null;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('listsCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+
+  async function load() {
+    if (!requireAuth()) return;
+    renderWeekLabel();
+    setStatus('Loading...');
+    try {
+      data = await loadListsData(getStoredConfig().spreadsheetId, token);
+      render();
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  // Only cut-to-order lines (products with a "Cut from (code)") need
+  // cutting — whole items are on the Picking list.
+  function buildCutGroups(orders) {
+    const groups = {};
+    orders.forEach(order => {
+      data.lines.filter(l => l['ORDER ID'] === order.ID).forEach(l => {
+        const prod = data.productByCode[l['PRODUCT CODE']];
+        if (!prod || !prod['Cut from (code)']) return;
+        const parentCode = prod['Cut from (code)'];
+        const parent = data.productByCode[parentCode];
+        const { cheese, portion } = splitPortionName(prod['Product name']);
+        if (!groups[parentCode]) {
+          groups[parentCode] = {
+            code: parentCode,
+            name: parent ? splitPortionName(parent['Product name']).cheese : cheese,
+            rows: []
+          };
+        }
+        const qty = parseFloat(l['QTY ORDERED']) || 0;
+        const nominal = parseFloat(prod['Nominal weight (kg)']) || 0;
+        groups[parentCode].rows.push({
+          product: prod,
+          portion: portion || prod['Product name'],
+          code: prod['Product code'],
+          qty, unit: l.UNIT,
+          weighed: sumCutWeight(data.cutsOfLine[l.ID]),
+          kg: l.UNIT === 'kg' ? qty : qty * nominal,
+          customer: order.CUSTOMER,
+          zone: zoneOf(order),
+          day: order['DELIVERY DATE'],
+          orderId: order.ID,
+          cutLife: prod['Cut shelf life (days)'],
+          // The wheel lot(s) this piece was allocated from, when it has been.
+          lots: [...new Set(data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
+            ? `awaiting ${(data.poOfLine[a['PO LINE ID']] || {}).ID || 'PO'}`
+            : a['BATCH/LOT NUMBER']))]
+        });
+      });
+    });
+    const zoneRank = z => z === 'Out of London' ? 0 : z === 'London' ? 1 : 2;
+    return Object.values(groups)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(g => {
+        g.rows.sort((a, b) => a.day.localeCompare(b.day) || zoneRank(a.zone) - zoneRank(b.zone) || a.customer.localeCompare(b.customer));
+        return g;
+      });
+  }
+
+  function render() {
+    const out = document.getElementById('listsOut');
+    const { inWeek, undated } = weekOrders();
+    const groups = buildCutGroups(inWeek);
+    const showDay = !dayFilter && new Set(inWeek.map(o => o['DELIVERY DATE'])).size > 1;
+    out.innerHTML = `
+      ${listNotesHtml([], undated)}
+      <section class="list-section">
+        <h3 class="list-h print-only">Cutting list <span class="muted" style="font-weight:400;">· ${escapeHtml(periodLabel())}</span></h3>
+        ${groups.length ? groups.map(g => {
+          const kg = g.rows.reduce((s, r) => s + r.kg, 0);
+          const pieces = g.rows.reduce((s, r) => s + (r.unit === 'kg' ? 1 : r.qty), 0);
+          return `
+          <div class="panel cut-group">
+            <div class="panel-h">
+              <h3>${escapeHtml(g.name)}</h3>
+              <span class="code">${escapeHtml(g.code)}</span>
+              <span class="muted" style="margin-left:auto; font-size:13px;">${pieces} piece(s) to cut · ≈ ${kg.toFixed(1)} kg</span>
+            </div>
+            <div class="scroll" style="overflow-x:auto;">
+              <table><thead><tr><th class="tick-col"></th><th>Portion</th><th class="num">Qty</th><th>Label for</th>${showDay ? '<th>Delivery</th>' : ''}<th>Zone</th><th>Wheel lot</th><th>Life after cut</th><th class="no-print">Order</th></tr></thead>
+              <tbody>${g.rows.map(r => `
+                <tr>
+                  <td class="tick-col"><span class="tick-box"></span></td>
+                  <td>${productCell(r.product, `<strong>${escapeHtml(r.portion)}</strong><br><span class="code">${escapeHtml(r.code)}</span>`)}</td>
+                  <td class="num">${escapeHtml(qtyUnit(r.qty, r.unit))}${r.weighed ? `<br><strong>${r.weighed.toFixed(2)} kg</strong>` : ''}</td>
+                  <td>${escapeHtml(r.customer)}</td>
+                  ${showDay ? `<td style="white-space:nowrap;">${escapeHtml(fmtDateShort(r.day))}</td>` : ''}
+                  <td>${zoneTag(r.zone)}</td>
+                  <td class="code">${r.lots.length ? r.lots.map(escapeHtml).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
+                  <td>${r.cutLife ? r.cutLife + ' day(s)' : '—'}</td>
+                  <td class="no-print">${orderLink(r.orderId)}</td>
+                </tr>`).join('')}
+              </tbody></table>
+            </div>
+          </div>`;
+        }).join('') : `<div class="empty" style="padding:24px;">Nothing to cut ${dayFilter ? 'on ' + escapeHtml(fmtDateShort(dayFilter)) : 'this week'} — no cut-to-order portions on these orders.</div>`}
+      </section>`;
+    const pieces = groups.reduce((n, g) => n + g.rows.length, 0);
+    setStatus(`${pieces} portion line(s) across ${groups.length} wheel(s), from ${inWeek.length} order(s).`, 'ok');
+  }
+
+  initWeekPicker(render);
+  document.getElementById('reloadBtn').addEventListener('click', load);
+  document.getElementById('printBtn').addEventListener('click', () => window.print());
+  window.addEventListener('load', load);
+  window.onRecordDialogClosed = load;
+</script>
+</body>
+</html>

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Picking list</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <div class="no-print">
+    <h2>Picking list</h2>
+  </div>
+  <div id="signedOutNotice" class="note no-print" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="listsCard" style="display:none;">
+    <div class="toolbar no-print" style="margin-bottom:16px;">
+      <div class="week-nav">
+        <button type="button" class="btn ghost sm" id="prevWeekBtn" aria-label="Previous week">&larr;</button>
+        <span id="weekLabel" class="week-label"></span>
+        <button type="button" class="btn ghost sm" id="nextWeekBtn" aria-label="Next week">&rarr;</button>
+        <button type="button" class="btn ghost sm" id="thisWeekBtn">This week</button>
+      </div>
+      <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
+      <button type="button" class="btn ghost sm" id="printBtn">Print picking list</button>
+      <label class="toggle-label">
+        <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
+      </label>
+    </div>
+    <div id="dayChips" class="day-chips no-print"></div>
+    <div id="listsOut"></div>
+    <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=11"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/lists-data.js?v=1"></script>
+<script>
+  // Picking list: product by product rather than order by order, so each
+  // product (and each lot of it) is fetched from the shelf once for every
+  // customer it's going to. Grouped by Storage, so the picker walks the
+  // fridge, then the ambient shelves. Cut-to-order portions aren't here —
+  // they come off the Cutting list.
+  let token = null;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('listsCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+
+  async function load() {
+    if (!requireAuth()) return;
+    renderWeekLabel();
+    setStatus('Loading...');
+    try {
+      data = await loadListsData(getStoredConfig().spreadsheetId, token);
+      render();
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  const fmtQty = n => String(Math.round(n * 1000) / 1000);
+
+  // { storage: [{ product, code, name, totals: {unit: qty}, rows: [...] }] }.
+  // One row per order line per lot it's allocated from; whatever isn't
+  // allocated yet is its own "Not allocated" row so the shortfall shows.
+  function buildPickGroups(orders) {
+    const byCode = {};
+    let cutCount = 0;
+    packingOrder(orders).forEach(order => {
+      packLines(order).forEach(l => {
+        if (l.isCut) { cutCount++; return; }
+        const p = byCode[l.code] = byCode[l.code] || {
+          product: l.product, code: l.code, name: l.name,
+          storage: (l.product && l.product.Storage) || '',
+          totals: {}, rows: []
+        };
+        p.totals[l.unit] = (p.totals[l.unit] || 0) + l.qty;
+        const base = { order, unit: l.unit, replaces: l.replaces };
+        l.lots.forEach(x => p.rows.push({ ...base, ...x }));
+        const allocated = l.lots.reduce((s, x) => s + x.qty, 0);
+        if (allocated + 0.0001 < l.qty) p.rows.push({ ...base, qty: l.qty - allocated, missing: true });
+      });
+    });
+    const groups = {};
+    Object.values(byCode).forEach(p => { (groups[p.storage] = groups[p.storage] || []).push(p); });
+    const rank = s => ({ Frozen: 0, Chilled: 1, Ambient: 2 }[s] ?? 3);
+    return {
+      cutCount,
+      groups: Object.keys(groups)
+        .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+        .map(storage => ({
+          storage,
+          products: groups[storage].sort((a, b) => a.name.localeCompare(b.name)).map(p => {
+            // Same lot together (FEFO: earliest best-before first), shortfalls last.
+            p.rows.sort((a, b) => (a.missing ? 1 : 0) - (b.missing ? 1 : 0) || (a.awaiting ? 1 : 0) - (b.awaiting ? 1 : 0)
+              || (a.bbe || '').localeCompare(b.bbe || '') || (a.lot || '').localeCompare(b.lot || ''));
+            return p;
+          })
+        }))
+    };
+  }
+
+  function render() {
+    const out = document.getElementById('listsOut');
+    const { inWeek, undated } = weekOrders();
+    const { groups, cutCount } = buildPickGroups(inWeek);
+    const showDay = !dayFilter && new Set(inWeek.map(o => o['DELIVERY DATE'])).size > 1;
+    const fromHtml = r => r.missing ? '<span class="tag t-warn">Not allocated</span>'
+      : r.awaiting ? `<span class="tag t-warn" title="Reserved on a purchase order not received yet">Awaiting ${escapeHtml(r.awaiting)}${r.due ? ' · ' + escapeHtml(fmtDateShort(r.due)) : ''}</span>`
+      : `<span class="code">${escapeHtml(r.lot)}</span>`;
+    const forHtml = r => `${escapeHtml(r.order.CUSTOMER)}${r.order._drop ? ` <span class="muted">· drop ${r.order._drop}</span>` : ''}${r.replaces ? `<div class="replaced-note">replaces ${escapeHtml(r.replaces)}</div>` : ''}`;
+
+    out.innerHTML = `
+      ${listNotesHtml(inWeek, undated)}
+      <section class="list-section">
+        <h3 class="list-h print-only">Picking list <span class="muted" style="font-weight:400;">· ${escapeHtml(periodLabel())}</span></h3>
+        ${groups.length ? groups.map(g => `
+          <h4 class="zone-h">${escapeHtml(g.storage || 'No storage set')} <span class="muted">· ${g.products.length} product(s)</span></h4>
+          ${g.products.map(p => `
+            <div class="panel pick-group">
+              <div class="panel-h">
+                <h3>${escapeHtml(p.name)}</h3>
+                <span class="code">${escapeHtml(p.code)}</span>
+                <span class="pick-total">${Object.entries(p.totals).map(([u, q]) => escapeHtml(qtyUnit(fmtQty(q), u))).join(' + ')}</span>
+              </div>
+              <table class="pick-table"><thead><tr><th class="tick-col"></th><th>Lot</th><th>Best before</th><th class="num">Qty</th><th>For</th>${showDay ? '<th>Delivery</th>' : ''}<th>Zone</th><th class="no-print">Order</th></tr></thead>
+              <tbody>${p.rows.map(r => `
+                <tr${r.missing ? ' class="short"' : ''}>
+                  <td class="tick-col"><span class="tick-box"></span></td>
+                  <td>${fromHtml(r)}</td>
+                  <td style="white-space:nowrap;">${r.bbe ? escapeHtml(fmtDateShort(r.bbe)) : '—'}</td>
+                  <td class="num">${escapeHtml(qtyUnit(fmtQty(r.qty), r.unit))}</td>
+                  <td>${forHtml(r)}</td>
+                  ${showDay ? `<td style="white-space:nowrap;">${escapeHtml(fmtDateShort(r.order['DELIVERY DATE']))}</td>` : ''}
+                  <td>${zoneTag(zoneOf(r.order))}</td>
+                  <td class="no-print">${orderLink(r.order.ID)}</td>
+                </tr>`).join('')}
+              </tbody></table>
+            </div>`).join('')}`).join('')
+        : `<div class="empty" style="padding:24px;">Nothing to pick ${dayFilter ? 'on ' + escapeHtml(fmtDateShort(dayFilter)) : 'this week'}.${inWeek.length ? '' : ' Use the arrows to look at another week.'}</div>`}
+        ${cutCount ? `<p class="muted" style="font-size:13px;">Plus ${cutCount} cut-to-order line(s) — those are on the <a href="cutting-list.html">Cutting list</a>.</p>` : ''}
+      </section>`;
+    const products = groups.reduce((n, g) => n + g.products.length, 0);
+    setStatus(`${products} product(s) to pick for ${inWeek.length} order(s).`, 'ok');
+  }
+
+  initWeekPicker(render);
+  document.getElementById('reloadBtn').addEventListener('click', load);
+  document.getElementById('printBtn').addEventListener('click', () => window.print());
+  window.addEventListener('load', load);
+  window.onRecordDialogClosed = load;
+</script>
+</body>
+</html>

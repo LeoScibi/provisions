@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Day sheet</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+<!-- The sheet is laid out in mm to the exact A4 page, so it prints edge to
+     edge with no browser margin; this overrides style.css's 12mm @page. -->
+<style>@media print{@page{size:A4 portrait;margin:0}}</style>
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <div class="no-print">
+    <h2>Day sheet</h2>
+  </div>
+  <div id="signedOutNotice" class="note no-print" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="listsCard" style="display:none;">
+    <div class="toolbar no-print" style="margin-bottom:16px;">
+      <div class="week-nav">
+        <button type="button" class="btn ghost sm" id="prevDayBtn" aria-label="Previous delivery day">&larr;</button>
+        <input type="date" id="dayInput" class="ds-date" aria-label="Delivery date">
+        <button type="button" class="btn ghost sm" id="nextDayBtn" aria-label="Next delivery day">&rarr;</button>
+        <button type="button" class="btn ghost sm" id="todayBtn">Next delivery day</button>
+      </div>
+      <button type="button" class="btn ghost sm" id="reloadBtn">Reload</button>
+      <button type="button" class="btn sm" id="printBtn">Print day sheet</button>
+      <label class="toggle-label">
+        <input type="checkbox" id="showAllToggle" style="width:auto;"> Show dispatched orders too
+      </label>
+    </div>
+    <div id="summary" class="ds-summary no-print"></div>
+    <div id="listsOut" class="ds-pages"></div>
+    <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=11"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/lists-data.js?v=1"></script>
+<script>
+  // Day sheet: one delivery date at a glance, printed on A4 — a 3 × 4 grid of
+  // customer cards (12 to a page) in packing order, each listing what that
+  // customer ordered. No photos, no lots: it's for seeing what the day ahead
+  // looks like, not for picking (that's picking.html).
+  //
+  // Cards fill the grid row by row (see layoutPages). A card too long for one
+  // cell takes two or more cells down its column (measured, not guessed — see
+  // measureCards); one too long for a whole column is cut short with "+N more".
+  let token = null;
+  let day = '';
+
+  const COLS = 3, ROWS = 4;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('listsCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+
+  async function load() {
+    if (!requireAuth()) return;
+    setStatus('Loading...');
+    try {
+      data = await loadListsData(getStoredConfig().spreadsheetId, token);
+      const asked = new URLSearchParams(location.search).get('day');
+      if (!day) day = asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) ? asked : nextDeliveryDay();
+      await render();
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  // Delivery dates that have orders on them, sorted.
+  function deliveryDays() {
+    return [...new Set(openOrders().map(o => o['DELIVERY DATE']).filter(Boolean))].sort();
+  }
+  // Today if anything delivers today, else the next date that has orders.
+  function nextDeliveryDay() {
+    const today = isoDate(new Date());
+    return deliveryDays().find(d => d >= today) || today;
+  }
+  function stepDay(dir) {
+    const days = deliveryDays();
+    const next = dir > 0 ? days.find(d => d > day) : days.filter(d => d < day).pop();
+    if (next) { day = next; render(); }
+    else showToast(dir > 0 ? 'No later deliveries booked.' : 'No earlier deliveries.');
+  }
+
+  const fmtQty = n => String(Math.round(n * 1000) / 1000);
+  const zoneShort = z => z === 'London' ? 'London' : z === 'Out of London' ? 'Out of London' : 'No zone';
+
+  function cardHtml(o, seq, maxItems) {
+    const lines = packLines(o);
+    const shown = maxItems == null ? lines : lines.slice(0, maxItems);
+    const more = lines.length - shown.length;
+    const zone = zoneOf(o);
+    const meta = [o.ID, o['CUSTOMER REF'] ? 'ref ' + o['CUSTOMER REF'] : '', o.BOXES ? o.BOXES + ' box' + (o.BOXES === '1' ? '' : 'es') : '']
+      .filter(Boolean).map(escapeHtml).join(' · ');
+    return `
+      <div class="ds-card${zone === 'Out of London' ? ' ool' : ''}">
+        <div class="ds-ch">
+          <span class="ds-seq">${seq}</span>
+          <span class="ds-cust">${escapeHtml(o.CUSTOMER)}</span>
+          <span class="ds-zone">${o._drop ? 'Drop ' + o._drop : escapeHtml(zoneShort(zone))}</span>
+        </div>
+        <div class="ds-meta">${meta}<span>${lines.length} item${lines.length === 1 ? '' : 's'}${o.STATUS === 'Dispatched' ? ' · dispatched' : ''}</span></div>
+        ${o.NOTES ? `<div class="ds-note">${escapeHtml(o.NOTES)}</div>` : ''}
+        <ul class="ds-items">${shown.map(l => `
+          <li${l.short ? ' class="short"' : ''}>
+            <span class="tick-box"></span>
+            <span class="ds-q">${escapeHtml(qtyUnit(fmtQty(l.qty), l.unit).replace(' Pieces', ' pc'))}</span>
+            <span class="ds-n">${escapeHtml(l.name)}</span>
+            ${l.isCut ? '<span class="ds-flag">cut</span>' : l.short ? '<span class="ds-flag warn">short</span>' : l.lots.some(x => x.awaiting) ? '<span class="ds-flag warn">on PO</span>' : ''}
+          </li>`).join('') || '<li class="muted">No lines on this order.</li>'}
+          ${more > 0 ? `<li class="ds-more">+ ${more} more — see packing slip</li>` : ''}
+        </ul>
+      </div>`;
+  }
+
+  // How many grid rows a card needs: rendered off-screen at the cell's exact
+  // width and compared against the cell height, both in the same mm the
+  // printed page uses. Over a whole column, items are dropped until it fits.
+  function measureCards(orders) {
+    const probe = document.createElement('div');
+    probe.className = 'ds-probe';
+    probe.innerHTML = '<div class="ds-page"><div class="ds-grid"><div class="ds-cell"></div></div></div>';
+    document.body.appendChild(probe);
+    const cell = probe.querySelector('.ds-cell');
+    const grid = probe.querySelector('.ds-grid');
+    const gap = parseFloat(getComputedStyle(grid).rowGap) || 0;
+    const cellH = (grid.clientHeight - gap * (ROWS - 1)) / ROWS;
+    const spanFor = h => Math.max(1, Math.ceil((h + gap - 0.5) / (cellH + gap)));
+    const out = orders.map((o, i) => {
+      cell.innerHTML = cardHtml(o, i + 1);
+      let span = spanFor(cell.firstElementChild.scrollHeight);
+      let maxItems = null;
+      if (span > ROWS) {
+        const n = packLines(o).length;
+        maxItems = n;
+        while (maxItems > 1) {
+          maxItems--;
+          cell.innerHTML = cardHtml(o, i + 1, maxItems);
+          if (spanFor(cell.firstElementChild.scrollHeight) <= ROWS) break;
+        }
+        span = ROWS;
+      }
+      return { order: o, span, maxItems };
+    });
+    probe.remove();
+    return out;
+  }
+
+  // Row-by-row, first-fit placement into pages of COLS x ROWS cells. Cards
+  // are tried in packing order; one that has no room left on this page
+  // (a long order needing several cells down a column) waits for the next
+  // page while shorter ones behind it fill the gaps, so no page goes out
+  // half empty. The numbers on the cards keep the packing order readable.
+  function layoutPages(cards) {
+    const pages = [];
+    let queue = cards.map((c, i) => ({ ...c, seq: i + 1 }));
+    while (queue.length) {
+      const used = [...Array(ROWS)].map(() => Array(COLS).fill(false));
+      const page = [], left = [];
+      queue.forEach(c => {
+        let slot = -1;
+        for (let p = 0; p < COLS * ROWS && slot < 0; p++) {
+          const r = Math.floor(p / COLS), col = p % COLS;
+          if (r + c.span <= ROWS && [...Array(c.span)].every((_, k) => !used[r + k][col])) slot = p;
+        }
+        if (slot < 0) { left.push(c); return; }
+        const row = Math.floor(slot / COLS), col = slot % COLS;
+        for (let k = 0; k < c.span; k++) used[row + k][col] = true;
+        page.push({ ...c, col, row });
+      });
+      pages.push(page);
+      queue = left;
+    }
+    return pages;
+  }
+
+  function summaryStats(orders) {
+    const lines = orders.flatMap(o => packLines(o));
+    return {
+      orders: orders.length,
+      london: orders.filter(o => zoneOf(o) === 'London').length,
+      outside: orders.filter(o => zoneOf(o) === 'Out of London').length,
+      noZone: orders.filter(o => !['London', 'Out of London'].includes(zoneOf(o))).length,
+      lines: lines.length,
+      cut: lines.filter(l => l.isCut).length,
+      short: lines.filter(l => l.short).length,
+      boxes: orders.reduce((s, o) => s + (parseInt(o.BOXES, 10) || 0), 0)
+    };
+  }
+
+  async function render() {
+    document.getElementById('dayInput').value = day;
+    history.replaceState(null, '', `?day=${day}`);
+    const orders = packingOrder(openOrders().filter(o => o['DELIVERY DATE'] === day));
+    const s = summaryStats(orders);
+    const statBits = [
+      `${s.orders} order${s.orders === 1 ? '' : 's'}`,
+      s.outside ? `${s.outside} out of London` : '',
+      s.london ? `${s.london} London drop${s.london === 1 ? '' : 's'}` : '',
+      s.noZone ? `${s.noZone} with no zone` : '',
+      `${s.lines} line${s.lines === 1 ? '' : 's'}`,
+      s.cut ? `${s.cut} to cut` : '',
+      s.short ? `${s.short} short` : '',
+      s.boxes ? `${s.boxes} boxes` : ''
+    ].filter(Boolean);
+
+    document.getElementById('summary').innerHTML = orders.length ? `
+      <div class="ds-stat"><b>${s.orders}</b><span>orders</span></div>
+      <div class="ds-stat"><b>${s.outside}</b><span>out of London</span></div>
+      <div class="ds-stat"><b>${s.london}</b><span>London drops</span></div>
+      <div class="ds-stat"><b>${s.lines}</b><span>lines</span></div>
+      <div class="ds-stat"><b>${s.cut}</b><span>to cut</span></div>
+      <div class="ds-stat${s.short ? ' warn' : ''}"><b>${s.short}</b><span>short of stock</span></div>
+      <div class="ds-links"><a href="cutting-list.html">Cutting list</a><a href="picking.html">Picking</a><a href="lists.html">Packing</a></div>` : '';
+
+    const out = document.getElementById('listsOut');
+    if (!orders.length) {
+      out.innerHTML = `<div class="empty" style="padding:24px;">No orders for delivery on ${escapeHtml(fmtDateLong(day))}. Use the arrows to jump to the next delivery day.</div>`;
+      setStatus('');
+      return;
+    }
+    if (document.fonts) await document.fonts.ready;
+    const pages = layoutPages(measureCards(orders));
+    out.innerHTML = pages.map((cards, p) => `
+      <div class="ds-page">
+        <div class="ds-head">
+          <div><span class="ds-title">${escapeHtml(fmtDateLong(day))}</span><span class="ds-sub">Day sheet</span></div>
+          <div class="ds-stats">${statBits.map(escapeHtml).join(' · ')}${pages.length > 1 ? ` · page ${p + 1} of ${pages.length}` : ''}</div>
+        </div>
+        <div class="ds-grid">${cards.map(c => `
+          <div class="ds-cell" style="grid-column:${c.col + 1}; grid-row:${c.row + 1} / span ${c.span};">${cardHtml(c.order, c.seq, c.maxItems)}</div>`).join('')}
+        </div>
+      </div>`).join('');
+    setStatus(`${orders.length} order(s) on ${pages.length} page(s).`, 'ok');
+  }
+
+  document.getElementById('prevDayBtn').addEventListener('click', () => stepDay(-1));
+  document.getElementById('nextDayBtn').addEventListener('click', () => stepDay(1));
+  document.getElementById('todayBtn').addEventListener('click', () => { day = nextDeliveryDay(); render(); });
+  document.getElementById('dayInput').addEventListener('change', e => { if (e.target.value) { day = e.target.value; render(); } });
+  document.getElementById('showAllToggle').addEventListener('change', () => { if (data) render(); });
+  document.getElementById('reloadBtn').addEventListener('click', load);
+  document.getElementById('printBtn').addEventListener('click', () => window.print());
+  window.addEventListener('load', load);
+  window.onRecordDialogClosed = load;
+</script>
+</body>
+</html>

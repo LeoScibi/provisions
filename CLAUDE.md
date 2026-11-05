@@ -62,6 +62,14 @@ models, sheet schemas, or conventions between the two.
   relies on (delete highest row index first within a sheet, since deleting
   a row shifts every later row's index down).
 
+- **Warehouse lists share `js/lists-data.js`:** `cutting-list.html`,
+  `picking.html`, `lists.html` (Packing) and `day-sheet.html` all load through
+  `loadListsData()` into the global `data`, and use its week/day picker
+  (`initWeekPicker`, `weekOrders`, `dayFilter`) and per-order helpers
+  (`packLines`, `packingGroups`, `packingOrder`). Packing order everywhere is
+  Out of London, then London by delivery date and DROP ORDER, then no zone;
+  drop numbers count within one delivery date's run.
+
 - **Installable:** `manifest.webmanifest` plus the `img/icon-*.png` icons, linked
   from every page's head (add those three lines to any new page). There's no
   service worker, so the installed app still needs signal to open a page.
@@ -183,7 +191,7 @@ models, sheet schemas, or conventions between the two.
   `trace.html?lot=…` (linked from Stock's By batch table) shows a lot's
   delivery, customers, piece weights and waste.
 - **Xero export** (`js/xero-export.js`, the "Export to Xero" button on
-  `lists.html`): the week's orders, by delivery date, as a Xero sales-invoice
+  `lists.html`, the Packing page): the week's orders, by delivery date, as a Xero sales-invoice
   import CSV — Xero's template headers exactly, one row per line, DD/MM/YYYY,
   ex-VAT `UnitAmount`, customer `Discount (%)` per line, VAT rate mapped to
   Xero's tax-rate names (`xeroTaxType()`). Account code is by customer:
@@ -221,9 +229,14 @@ stock.html                       Stock view
 stock-take.html                    Physical count vs. system quantity
 receiving.html                       Check a delivery in, line by line (phone-first)
 orders.html                          Place orders, allocate stock
+day-sheet.html                       One delivery day on A4: 3 x 4 grid of customer
+                                     cards (12 a page), each listing what they ordered
+cutting-list.html                    Week's cut-to-order portions, wheel by wheel
 cutting.html                         Weigh each cut piece, record waste (phone-first)
+picking.html                         Week's whole items product by product / lot by
+                                     lot, with who each is for (by Storage)
 trace.html                           One lot: delivery, customers, weights, waste
-lists.html                             Cutting list, packing slips (truck order, box
+lists.html                             Packing: slips (each day's truck order, box
                                        counts), delivery notes, box labels,
                                        weekly Xero invoice export
 reports.html                             Sales / purchases for any period against another:

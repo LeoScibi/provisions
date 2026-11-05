@@ -22,8 +22,11 @@
     ['index.html', 'Dashboard', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'],
     ['Sales', [
       ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],
-      ['cutting.html', 'Cutting', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>'],
-      ['lists.html', 'Packing lists', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>']
+      ['day-sheet.html', 'Day sheet', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M8 14h3M13 14h3M8 17h3"/>'],
+      ['cutting-list.html', 'Cutting list', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>'],
+      ['cutting.html', 'Weigh cuts', '<path d="M5 20h14"/><path d="M12 4v4"/><path d="M6 8h12l-2 8H8z"/>'],
+      ['picking.html', 'Picking', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>'],
+      ['lists.html', 'Packing', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>']
     ]],
     ['Buying', [
       ['purchase-orders.html', 'Purchase orders', '<path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'],
