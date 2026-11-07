@@ -250,7 +250,12 @@ test-data.html                           Generates / removes 6 months of TEST-ta
 Test data: every row `test-data.html` writes carries `TEST` in its tab's
 NOTES (PurchaseOrderLines, which has none, via its TEST purchase order), so
 "Remove test data" deletes exactly those rows. Don't add NOTES = TEST to
-real data.
+real data. Its "Next week's orders" section (`planNextWeek()`) swaps the
+undispatched TEST orders for next week's, re-ordered from each customer's
+last 8 weeks and allocated as `autoAllocate()` does (shelf FEFO, then PO
+reservations), leaving test stock and dispatched history alone; it moves
+overdue open TEST POs to early next week and places TEST POs for most
+shortfalls. Re-runnable.
 
 ## Working here
 - Always confirm you're in `~/provisionslondon` (not a Downloads copy or
