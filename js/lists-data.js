@@ -62,6 +62,11 @@ async function loadListsData(spreadsheetId, token) {
       const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
       return Object.fromEntries(toObjects(polRows).map(l => [l.ID, pos[l['PO ID']] || { ID: l['PO ID'] }]));
     })(),
+    // For the Today page (index.html): goods in and stock alerts.
+    purchaseOrders: toObjects(poRows),
+    poLines: toObjects(polRows),
+    deliveries: toObjects(deliveryRows),
+    products,
     dropCol: dropIdx >= 0 ? colLetter(dropIdx + 1) : null,
     boxesCol: boxesIdx >= 0 ? colLetter(boxesIdx + 1) : null
   };
@@ -122,6 +127,13 @@ let weekOffset = 0;
 let dayFilter = '';
 
 function initWeekPicker(onChange) {
+  // ?day=YYYY-MM-DD (from the Today page or the Orders pipeline) opens on that
+  // delivery day's week with the day picked.
+  const qd = new URLSearchParams(location.search).get('day');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(qd || '')) {
+    weekOffset = Math.round((mondayOf(new Date(qd + 'T00:00:00')) - mondayOf(new Date())) / (7 * 86400000));
+    dayFilter = qd;
+  }
   const shift = delta => {
     weekOffset = delta === 0 ? 0 : weekOffset + delta;
     dayFilter = '';

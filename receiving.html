@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="stylesheet" href="css/style.css?v=48">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -29,7 +29,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=11"></script>
+<script src="js/shell.js?v=12"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
 <script src="js/supplier-products.js?v=1"></script>
@@ -40,6 +40,9 @@
   // ticked off in turn, then one confirm that records the lot. The signal in
   // there can't be relied on, so nothing here touches the network until that
   // confirm, and what's typed stays on the phone (see saveDraft) until it works.
+  // On a desktop-width screen (isDesk()) the same delivery is one table, every
+  // line editable at once, and "Review delivery" checks them all together; the
+  // draft is the same either way, so a check started on a phone carries over.
   let token = null;
   let data = null;      // everything read from the sheet
   let session = null;   // the PO being checked: { po, lines, open }
@@ -48,6 +51,9 @@
   const warned = {};    // line index -> the odd-looking qty already warned about
 
   const out = document.getElementById('out');
+  const deskQuery = window.matchMedia('(min-width: 900px)');
+  const isDesk = () => deskQuery.matches;
+  deskQuery.addEventListener('change', () => { if (data) render(); });
 
   function setStatus(msg, kind) {
     const el = document.getElementById('status');
@@ -199,6 +205,33 @@
     }).join('');
   }
 
+  function deskListHtml() {
+    const open = data.pos.filter(p => p.STATUS === 'Ordered')
+      .sort((a, b) => (a['EXPECTED START DATE'] || '9999').localeCompare(b['EXPECTED START DATE'] || '9999'));
+    if (!open.length) return '<div class="empty" style="padding:24px;">No deliveries waiting. Purchase orders appear here once they\'re placed.</div>';
+    const rows = open.map(po => {
+      const lines = data.lines.filter(l => l['PO ID'] === po.ID);
+      const draft = readDraft(po.ID);
+      const started = draft ? draft.filter(l => l.checked).length : 0;
+      const range = po['EXPECTED END DATE'] && po['EXPECTED END DATE'] !== po['EXPECTED START DATE']
+        ? `${fmtDateShort(po['EXPECTED START DATE'])}–${fmtDateShort(po['EXPECTED END DATE'])}` : fmtDateShort(po['EXPECTED START DATE']);
+      return `
+        <tr class="gi-row-link" data-open="${escapeHtml(po.ID)}">
+          <td><strong>${escapeHtml(po.SUPPLIER)}</strong>${started ? `<div class="gi-started">Started: ${started} checked on this device</div>` : ''}</td>
+          <td><span class="code">${escapeHtml(po.ID)}</span></td>
+          <td class="num">${lines.length}</td>
+          <td>${escapeHtml(range)}</td>
+          <td>${dueTag(po)}</td>
+          <td class="num"><button type="button" class="btn sm">Check in</button></td>
+        </tr>`;
+    }).join('');
+    return `
+      <div class="panel"><table class="gi-table">
+        <thead><tr><th>Supplier</th><th>PO</th><th class="num">Items</th><th>Expected</th><th></th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }
+
   // ---- checking one PO ----
 
   // How the delivery will look when it's counted: "2 cases of 12", "2 × 2.3kg".
@@ -322,6 +355,90 @@
       </div>`;
   }
 
+  // The desktop check: one table row per lot, every line open at once.
+  function deskLineRows(line, li) {
+    const p = productOf(line.code);
+    const hint = packHint(line);
+    const reserved = reservedOn(line);
+    const product = `
+      <div class="gi-dprod">
+        ${productThumb(p, 'xs')}
+        <span class="cut-title">
+          <strong>${escapeHtml(nameOf(line.code))}</strong>
+          <span class="muted"><span class="code">${escapeHtml(line.code)}</span>${line.isNew ? ' · <span class="tag t-chill">Extra</span>' : ''}</span>
+        </span>
+      </div>
+      ${reserved > 0 ? `<div class="gi-reserved">${escapeHtml(qtyUnit(reserved, line.unit))} promised to orders</div>` : ''}
+      <div class="cp-warn" data-warn="${li}" hidden></div>`;
+    const ordered = line.isNew ? '<span class="muted">Not ordered</span>'
+      : `${escapeHtml(qtyUnit(line.ordered, line.unit))}${hint ? `<div class="muted gi-hint">${escapeHtml(hint)}</div>` : ''}`;
+    const lineActions = `
+      <button type="button" class="btn ghost sm" data-add-lot="${li}">+ Lot</button>
+      ${line.isNew ? `<button type="button" class="btn ghost sm" data-remove-line="${li}">Remove</button>`
+        : `<button type="button" class="btn ghost sm" data-missing="${li}">Didn't arrive</button>`}`;
+    if (line.missing) {
+      return `
+        <tr data-line="${li}" class="gi-missing">
+          <td>${product}</td>
+          <td class="num">${ordered}</td>
+          <td colspan="3" class="neg"><strong>Not delivered</strong></td>
+          <td class="gi-dact"><button type="button" class="btn ghost sm" data-edit="${li}">Undo</button></td>
+        </tr>`;
+    }
+    return line.lots.map((lot, lj) => {
+      const note = bbeNote(lot.bbe);
+      return `
+        <tr${lj === 0 ? ` data-line="${li}"` : ''} class="${lj === 0 ? 'gi-first' : 'gi-more'}">
+          <td>${lj === 0 ? product : `<span class="muted gi-lotn">Lot ${lj + 1}</span>`}</td>
+          <td class="num">${lj === 0 ? ordered : ''}</td>
+          <td><span class="cp-input gi-dqty"><input type="text" inputmode="decimal" autocomplete="off" aria-label="Quantity received" data-f="qty" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.qty)}"><span class="cp-unit">${escapeHtml(unitLabel(line.unit))}</span></span></td>
+          <td><input type="text" class="gi-din" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Lot number" data-f="lot" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.lot)}" placeholder="From the label"></td>
+          <td><input type="date" class="gi-din" aria-label="Best before" data-f="bbe" data-li="${li}" data-lj="${lj}" value="${escapeHtml(lot.bbe)}"><div class="gi-bbe-note" data-bbe-note="${li}:${lj}"${note ? '' : ' hidden'}>${escapeHtml(note)}</div></td>
+          <td class="gi-dact">${lj === 0 ? lineActions : `<button type="button" class="btn ghost sm" data-remove-lot="${li}:${lj}">Remove</button>`}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  function deskCheckHtml() {
+    const po = session.po;
+    const range = po['EXPECTED END DATE'] && po['EXPECTED END DATE'] !== po['EXPECTED START DATE']
+      ? `${fmtDateShort(po['EXPECTED START DATE'])}–${fmtDateShort(po['EXPECTED END DATE'])}` : fmtDateShort(po['EXPECTED START DATE']);
+    const missing = session.lines.filter(l => l.missing).length;
+    return `
+      <div class="gi-dhead">
+        <button type="button" class="btn ghost sm" data-back>&larr; Deliveries</button>
+        <div class="gi-dtitle">
+          <strong>${escapeHtml(po.SUPPLIER)}</strong>
+          <span class="muted"><span class="code">${escapeHtml(po.ID)}</span> · ${session.lines.length} item${session.lines.length === 1 ? '' : 's'}${range ? ' · expected ' + escapeHtml(range) : ''}${missing ? ` · ${missing} not delivered` : ''}</span>
+        </div>
+        <button type="button" class="btn ghost sm" data-restart>Start again</button>
+      </div>
+      <div class="panel"><table class="gi-table gi-dcheck">
+        <thead><tr><th>Product</th><th class="num">Ordered</th><th>Received</th><th>Lot number</th><th>Best before</th><th></th></tr></thead>
+        <tbody>${session.lines.map(deskLineRows).join('')}</tbody>
+      </table></div>
+      <div class="gi-dfoot">
+        <div class="gi-dextra">${extrasHtml()}</div>
+        <button type="button" class="btn" data-review>Review delivery</button>
+      </div>`;
+  }
+
+  // Every line at once, for the desktop's Review button: true when all are
+  // complete (and marks them checked); otherwise shows what's wrong on each.
+  function checkAllLines() {
+    const problems = {};
+    session.lines.forEach((line, li) => { if (!line.missing) { const msg = lineProblem(li); if (msg) problems[li] = msg; } });
+    if (!Object.keys(problems).length) {
+      session.lines.forEach(line => { if (!line.missing) finishLine(line); });
+      saveDraft();
+      return true;
+    }
+    render();
+    Object.entries(problems).forEach(([li, msg]) => showWarn(li, msg));
+    out.querySelector(`[data-line="${Object.keys(problems)[0]}"]`)?.scrollIntoView({ block: 'center' });
+    return false;
+  }
+
   // ---- review and confirm ----
 
   // The lines as receive.js wants them, quantities tidied.
@@ -370,7 +487,10 @@
   }
 
   function render() {
-    out.innerHTML = view === 'check' ? checkHtml() : view === 'review' ? reviewHtml() : view === 'done' ? doneHtml() : listHtml();
+    const desk = isDesk();
+    document.getElementById('receivingCard').classList.toggle('gi-wide', desk && (view === 'list' || view === 'check'));
+    out.innerHTML = view === 'check' ? (desk ? deskCheckHtml() : checkHtml()) : view === 'review' ? reviewHtml()
+      : view === 'done' ? doneHtml() : (desk ? deskListHtml() : listHtml());
   }
 
   function showWarn(li, msg) {
@@ -383,24 +503,32 @@
   // Moves on from a line, once its lots are complete. A quantity a long way
   // from the order (872 for 8.72) needs a second tap, as a weight does on the
   // cutting screen.
-  function checkLine(li) {
+  function lineProblem(li) {
     const line = session.lines[li];
+    const again = isDesk() ? 'Click Review again' : 'Tap again';
     const filled = line.lots.filter(l => parseQty(l.qty) > 0 || (l.lot || '').trim() || l.bbe);
-    if (!line.lots.some(l => parseQty(l.qty) > 0)) { showWarn(li, 'Enter the quantity, or tap "Didn\'t arrive".'); return; }
+    if (!line.lots.some(l => parseQty(l.qty) > 0)) return 'Enter the quantity, or mark it "Didn\'t arrive".';
     for (const l of filled) {
-      if (parseQty(l.qty) <= 0) { showWarn(li, 'Enter a quantity for every lot, or remove the lot.'); return; }
-      if (!(l.lot || '').trim()) { showWarn(li, 'Enter the lot number from the label.'); return; }
-      if (!l.bbe) { showWarn(li, 'Enter the best-before date from the label.'); return; }
+      if (parseQty(l.qty) <= 0) return 'Enter a quantity for every lot, or remove the lot.';
+      if (!(l.lot || '').trim()) return 'Enter the lot number from the label.';
+      if (!l.bbe) return 'Enter the best-before date from the label.';
     }
     const total = Math.round(line.lots.reduce((s, l) => s + parseQty(l.qty), 0) * 1000) / 1000;
     if (line.ordered && Math.abs(total - line.ordered) / line.ordered > 0.25 && warned[li] !== total) {
       warned[li] = total;
-      showWarn(li, `${qtyUnit(total, line.unit)} is a long way from the ${qtyUnit(line.ordered, line.unit)} ordered. Tap again if that's right.`);
-      return;
+      return `${qtyUnit(total, line.unit)} is a long way from the ${qtyUnit(line.ordered, line.unit)} ordered. ${again} if that's right.`;
     }
+    return '';
+  }
+  function finishLine(line) {
     line.lots = line.lots.filter(l => parseQty(l.qty) > 0).map(l => ({ ...l, qty: parseQty(l.qty) }));
     line.checked = true;
     line.missing = false;
+  }
+  function checkLine(li) {
+    const msg = lineProblem(li);
+    if (msg) { showWarn(li, msg); return; }
+    finishLine(session.lines[li]);
     moveOn(li);
   }
 
@@ -410,6 +538,7 @@
     session.open = after >= 0 ? after : lines.findIndex(l => !l.checked);
     saveDraft();
     render();
+    if (isDesk()) return; // every line is already on screen
     const target = session.open >= 0 ? out.querySelector(`[data-line="${session.open}"]`) : out.querySelector('[data-review]');
     target?.scrollIntoView({ block: 'center' });
   }
@@ -478,7 +607,7 @@
       session.open = li;
       saveDraft();
       render();
-      out.querySelector(`[data-line="${li}"]`)?.scrollIntoView({ block: 'start' });
+      if (!isDesk()) out.querySelector(`[data-line="${li}"]`)?.scrollIntoView({ block: 'start' });
       return;
     }
     const next = t.closest('[data-next]');
@@ -515,6 +644,7 @@
       return;
     }
     if (t.closest('[data-review]') && !t.closest('[data-review]').disabled) {
+      if (isDesk() && !checkAllLines()) return;
       view = 'review';
       setStatus('');
       render();

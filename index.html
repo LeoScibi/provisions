@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Provisions — Dashboard</title>
+<title>Provisions — Today</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="stylesheet" href="css/style.css?v=48">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -28,69 +28,42 @@
 
 <header class="topbar no-print" id="topbar"></header>
 
-<main>
-  <h2>Dashboard</h2>
+<main class="today">
+  <div class="today-head">
+    <div>
+      <div class="kicker" id="todayKicker"></div>
+      <h2>Today</h2>
+    </div>
+    <div class="alerts" id="alerts"></div>
+  </div>
 
-  <div class="mono js-status" style="margin:-12px 0 16px; font-size:12.5px; color:var(--steel);"></div>
+  <div class="mono js-status" style="margin:-8px 0 16px; font-size:12.5px; color:var(--steel);"></div>
 
-  <div id="dashCard" style="display:none;">
+  <div id="dashCard" hidden>
+    <!-- On a phone: big buttons for the warehouse jobs, each with what's waiting. -->
+    <section class="tasks" id="phoneTasks" aria-label="Warehouse jobs"></section>
 
-    <!-- This week's snapshot — week-scoped; the switcher only affects this band -->
-    <div class="section-gap week-band">
-      <div class="week-bar">
-        <button type="button" class="wk-btn" id="wkPrev" aria-label="Previous week"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
-        <div><span class="kicker" id="wkKicker">This week</span></div>
-        <button type="button" class="wk-btn" id="wkNext" aria-label="Next week"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
-        <a href="#" class="wk-jump" id="wkJump" style="display:none;">Jump to this week <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></a>
+    <button type="button" class="task-back" id="taskViewBtn">← Warehouse buttons</button>
+    <div class="today-grid">
+      <section class="panel run-card" id="runToday" aria-labelledby="runTodayH"></section>
+      <div class="today-side">
+        <section class="panel run-card run-next" id="runNext" aria-labelledby="runNextH"></section>
+        <section class="panel gi-card" aria-labelledby="goodsInH">
+          <div class="run-h"><h3 id="goodsInH">Goods in</h3><a href="purchase-orders.html" class="run-link">All POs</a></div>
+          <div id="goodsInList"></div>
+        </section>
       </div>
-      <h2 style="font-size:22px; margin-bottom:16px;" id="wkHeading">This week's snapshot</h2>
-      <div class="row" id="wkStats" style="margin-bottom:2px;"></div>
     </div>
-
-    <div class="live-divider"><span class="kicker">Right now</span></div>
-
-    <!-- Right now: four compact boxes; each expands to full width on click. -->
-    <div class="dash-grid">
-      <section class="panel dash-box" id="boxDeliveries">
-        <div class="panel-h"><h3 id="upcomingTitle">Deliveries this week</h3><span class="db-count" id="upcomingCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
-        <div class="db-body">
-          <div id="lateSection" hidden>
-            <div class="db-sub db-sub-late">Late · <span id="lateCount"></span></div>
-            <div id="lateList"></div>
-            <div class="db-sub">Due this week</div>
-          </div>
-          <div id="upcomingList"></div>
-        </div>
-        <button type="button" class="db-more" data-expand hidden></button>
-      </section>
-
-      <section class="panel dash-box" id="boxOrders">
-        <div class="panel-h"><h3>Customer orders</h3><span class="db-count" id="ordersCount"></span><a href="orders.html" class="btn sm" style="margin-left:6px;">+ New</a><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
-        <div class="db-body"><div id="custOrdersList"></div></div>
-        <button type="button" class="db-more" data-expand hidden></button>
-      </section>
-
-      <section class="panel dash-box" id="boxShort">
-        <div class="panel-h"><h3>Short-dated · under 3 weeks</h3><span class="db-count" id="expiringCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
-        <div class="db-body"><div id="expiringList"></div></div>
-        <button type="button" class="db-more" data-expand hidden></button>
-      </section>
-
-      <section class="panel dash-box" id="boxLow">
-        <div class="panel-h"><h3>Low stock</h3><span class="db-count" id="lowStockCount"></span><button type="button" class="db-expand" data-expand aria-label="Expand" title="Expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></button></div>
-        <div class="db-body"><div id="lowStockList"></div></div>
-        <button type="button" class="db-more" data-expand hidden></button>
-      </section>
-    </div>
-
   </div>
 </main>
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=11"></script>
+<script src="js/shell.js?v=12"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=4"></script>
+<script src="js/cuts.js?v=1"></script>
+<script src="js/lists-data.js?v=2"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
   let tokenClient = null;
@@ -108,392 +81,307 @@
     document.body.classList.toggle('signed-out', !tryResumeSession());
   }
 
-  // Turns a sheet's [header, ...rows] into plain objects keyed by header text.
-  function toObjects(rows) {
-    if (!rows.length) return [];
-    const [head, ...rest] = rows;
-    return rest.map(r => { const o = {}; head.forEach((h, i) => { o[h] = r[i] ?? ''; }); return o; });
+  // ---- Today ----
+  // What has to happen now: the next delivery run (today's, if there is one)
+  // step by step, the run after it, goods due in, and a strip of stock alerts.
+  // Everything is computed from one loadListsData() read (js/lists-data.js);
+  // nothing is stored.
+
+  // Lots with this many days or fewer left count as short-dated.
+  const ALERT_SHORT_DAYS = 21;
+  // Order statuses in working order, each a shade darker (the run bar).
+  const STAGES = [
+    ['New', '#D8DCE6'], ['Allocated', '#AEB6C9'], ['Picked', '#8A95AE'],
+    ['Cut', '#66728F'], ['Packed', '#3E4A69'], ['Dispatched', '#1F2940']
+  ];
+  const ICON_TICK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
+
+  const statusOf = o => o.STATUS || 'New';
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+  const todayIso = () => isoDate(new Date());
+
+  function daysUntil(iso) {
+    const t = new Date(iso + 'T00:00:00'), now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return Math.round((t - now) / 86400000);
+  }
+  function dayName(iso) {
+    return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  }
+  function isoWeek(d) {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+    return Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 86400000 + 1) / 7);
+  }
+  // "Today", "Tomorrow", "In 6 days", "2 days ago".
+  function whenLabel(iso) {
+    const n = daysUntil(iso);
+    return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n > 1 ? `In ${n} days` : n === -1 ? 'Yesterday' : `${-n} days ago`;
   }
 
-  function fmtDateShort(iso) {
-    if (!iso) return '';
-    const d = new Date(iso + 'T00:00:00');
-    if (isNaN(d)) return iso;
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  // Pieces still to weigh on an order: every piece weighSource() says goes
+  // over the bench, less the Cuts rows already saved against its line.
+  function piecesToWeigh(order) {
+    return data.lines.filter(l => l['ORDER ID'] === order.ID).reduce((n, l) => {
+      const src = weighSource(l, data.productByCode);
+      if (!src) return n;
+      return n + Math.max(0, linePieces(l, src).count - (data.cutsOfLine[l.ID] || []).length);
+    }, 0);
   }
 
-  function fmtDateRange(s, e) {
-    if (!s) return 'No date set';
-    if (!e || e === s) return fmtDateShort(s);
-    return `${fmtDateShort(s)} – ${fmtDateShort(e)}`;
+  // One delivery date's orders and what's left to do on them.
+  function runOf(date) {
+    const orders = data.orders.filter(o => o['DELIVERY DATE'] === date);
+    const counts = Object.fromEntries(STAGES.map(([s]) => [s, 0]));
+    orders.forEach(o => { counts[statusOf(o)] = (counts[statusOf(o)] || 0) + 1; });
+    const open = orders.filter(o => statusOf(o) !== 'Dispatched');
+    const weigh = open.map(o => ({ o, n: piecesToWeigh(o) }));
+    const toWeigh = weigh.reduce((s, x) => s + x.n, 0);
+    const weighing = weigh.filter(x => x.n > 0).map(x => x.o.ID);
+    const zones = [...new Set(orders.map(zoneOf).filter(Boolean))].sort((a, b) => (a === 'London' ? -1 : 1));
+    return {
+      date, orders, counts, zones,
+      allocate: open.filter(o => statusOf(o) === 'New' || packLines(o).some(l => l.short)),
+      pick: open.filter(o => statusOf(o) === 'Allocated'),
+      toWeigh, weighOrders: weighing.length,
+      pack: open.filter(o => ['Picked', 'Cut'].includes(statusOf(o)) && !weighing.includes(o.ID)),
+      dispatch: open.filter(o => statusOf(o) === 'Packed'),
+      invoiceable: orders.filter(o => !/\bTEST\b/.test(o.NOTES || '') && piecesToWeigh(o) === 0).length,
+      billable: orders.filter(o => !/\bTEST\b/.test(o.NOTES || '')).length
+    };
   }
 
-  // ---- week helpers — weeks run Monday–Sunday; offset 0 = the week
-  // containing today, negative = past, positive = future ----
-
-  function mondayOf(date) {
-    const d = new Date(date);
-    const day = d.getDay(); // 0 Sun .. 6 Sat
-    d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
-    d.setHours(0, 0, 0, 0);
-    return d;
+  // Today's run if today has open orders, else the next date that does; then
+  // the delivery date after it. Earlier days still not dispatched are an alert.
+  function pickRuns() {
+    const today = todayIso();
+    const dates = [...new Set(data.orders.map(o => o['DELIVERY DATE']).filter(Boolean))].sort();
+    const hasOpen = d => data.orders.some(o => o['DELIVERY DATE'] === d && statusOf(o) !== 'Dispatched');
+    const first = hasOpen(today) ? today : dates.find(d => d > today && hasOpen(d)) || (dates.includes(today) ? today : null);
+    const second = first ? dates.find(d => d > first) : null;
+    return { first, second };
   }
 
-  function weekRange(offset) {
-    const start = mondayOf(new Date());
-    start.setDate(start.getDate() + offset * 7);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    return { start, end };
+  function runTitle(run) {
+    const zones = run.zones.length ? run.zones.join(' + ') : 'Delivery';
+    return `${escapeHtml(zones)} · ${escapeHtml(dayName(run.date))}`;
   }
 
-  // Local-date ISO string (not toISOString, which converts to UTC and can
-  // shift the date near midnight in a +ve timezone like BST).
-  function isoDate(d) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function stageBar(run, big) {
+    const total = run.orders.length || 1;
+    const parts = STAGES.filter(([s]) => run.counts[s]);
+    const label = parts.map(([s]) => `${run.counts[s]} ${s.toLowerCase()}`).join(', ');
+    return `
+      <div class="run-bar${big ? '' : ' sm'}" role="img" aria-label="${escapeHtml(label)}">
+        ${parts.map(([s, c]) => `<span style="flex:${run.counts[s] / total}; background:${c}" title="${s}: ${run.counts[s]}"></span>`).join('')}
+      </div>
+      <div class="run-legend">${STAGES.filter(([s]) => run.counts[s] || (big && ['Allocated', 'Packed', 'Dispatched'].includes(s))).map(([s, c]) =>
+        `<span><i style="background:${c}"></i><b>${run.counts[s]}</b> ${s}</span>`).join('')}</div>`;
   }
 
-  function fmtWeekRange(start, end) {
-    const sameMonth = start.getMonth() === end.getMonth();
-    const s = start.toLocaleDateString('en-GB', sameMonth ? { day: 'numeric' } : { day: 'numeric', month: 'short' });
-    const e = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    return `${s}–${e}`;
+  function stepRow(n, { title, sub, count, href, action, primary, later }) {
+    const done = !count && !later;
+    return `
+      <div class="step${done ? ' done' : ''}${later ? ' later' : ''}">
+        <span class="step-n">${done ? ICON_TICK : n}</span>
+        <div class="step-b"><div class="step-t">${title}</div><div class="step-s">${done ? 'Nothing waiting' : sub}</div></div>
+        <a class="btn sm${primary && !done ? '' : ' ghost'}" href="${href}">${action}</a>
+      </div>`;
   }
 
-  function dateInRange(dateStr, startIso, endIso) {
-    return !!dateStr && dateStr >= startIso && dateStr <= endIso;
+  function renderRunToday(run) {
+    const box = document.getElementById('runToday');
+    if (!run) {
+      box.innerHTML = `
+        <div class="run-h"><div><div class="kicker">Next run</div><h3 id="runTodayH" class="run-title">No deliveries booked</h3></div></div>
+        <div class="empty-block">
+          <div class="empty-title">Nothing to send out yet</div>
+          <div class="empty-sub">Orders you place show up here, step by step, for the day they're delivered.</div>
+          <a href="orders.html?new=1" class="btn sm">+ New order</a>
+        </div>`;
+      return;
+    }
+    const d = run.date;
+    const q = `?day=${d}`;
+    // The first step with something waiting is the one to do now.
+    const steps = [
+      run.allocate.length ? { title: 'Allocate stock', sub: `${plural(run.allocate.length, 'order')} not fully covered`, count: run.allocate.length, href: `orders.html${q}`, action: 'Open orders' } : null,
+      { title: 'Pick', sub: `${plural(run.pick.length, 'order')} allocated, ready to pick`, count: run.pick.length, href: `picking.html${q}`, action: 'Picking list' },
+      { title: 'Weigh cuts', sub: `${plural(run.toWeigh, 'piece')} across ${plural(run.weighOrders, 'order')}`, count: run.toWeigh, href: 'cutting.html', action: 'Weigh cuts' },
+      { title: 'Pack', sub: `${plural(run.pack.length, 'order')} picked and weighed`, count: run.pack.length, href: `lists.html${q}`, action: 'Packing slips' },
+      { title: 'Load and dispatch', sub: `${plural(run.dispatch.length, 'order')} packed`, count: run.dispatch.length, href: `day-sheet.html${q}`, action: 'Day sheet' },
+      { title: 'Invoice in Xero', sub: `${run.invoiceable} of ${run.billable} ready · every piece must be weighed first`, count: run.invoiceable, href: `lists.html${q}`, action: 'Export to Xero', later: !run.invoiceable && run.billable > 0 }
+    ].filter(Boolean);
+    const now = steps.findIndex(s => s.count);
+    if (now >= 0) steps[now].primary = true;
+    const n = daysUntil(d);
+    box.innerHTML = `
+      <div class="run-h">
+        <div><div class="kicker">${n === 0 ? "Today's run" : 'Next run · ' + escapeHtml(whenLabel(d))}</div><h3 id="runTodayH" class="run-title">${runTitle(run)}</h3></div>
+        <a class="run-link" href="orders.html${q}">${plural(run.orders.length, 'order')} · open pipeline</a>
+      </div>
+      ${stageBar(run, true)}
+      <div class="steps">${steps.map((s, i) => stepRow(i + 1, s)).join('')}</div>`;
   }
 
-  function rangesOverlap(aStart, aEnd, bStart, bEnd) {
-    return aStart <= bEnd && (aEnd || aStart) >= bStart;
+  function renderRunNext(run) {
+    const box = document.getElementById('runNext');
+    box.hidden = !run;
+    if (!run) return;
+    const q = `?day=${run.date}`;
+    const pieces = run.orders.filter(o => statusOf(o) !== 'Dispatched').reduce((s, o) => s + piecesToWeigh(o), 0);
+    box.innerHTML = `
+      <div class="run-h">
+        <div><div class="kicker">After that · ${escapeHtml(whenLabel(run.date))}</div><h3 id="runNextH" class="run-title sm">${runTitle(run)}</h3></div>
+        <a class="run-link" href="orders.html${q}">${plural(run.orders.length, 'order')}</a>
+      </div>
+      ${stageBar(run, false)}
+      <div class="todo-list">
+        ${run.allocate.length ? `<a class="todo warn" href="orders.html${q}"><span>${plural(run.allocate.length, 'order')} not fully allocated</span><span>Allocate →</span></a>` : ''}
+        ${pieces ? `<a class="todo" href="cutting-list.html${q}"><span>Cutting list · ${plural(pieces, 'piece')}</span><span>Print →</span></a>` : ''}
+        ${!run.allocate.length && !pieces ? '<p class="muted" style="margin:0;">All allocated, nothing to cut.</p>' : ''}
+      </div>`;
   }
 
-  function daysUntil(dateStr) {
-    const target = new Date(dateStr + 'T00:00:00');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return Math.round((target - today) / 86400000);
+  // Open purchase orders that are late, due today or due in the next week.
+  function goodsIn() {
+    const today = todayIso();
+    const dueBy = po => po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '';
+    const open = data.purchaseOrders.filter(po => po.STATUS === 'Ordered' || !po.STATUS);
+    const late = open.filter(po => dueBy(po) && dueBy(po) < today).sort((a, b) => dueBy(a).localeCompare(dueBy(b)));
+    const dueToday = open.filter(po => !late.includes(po) && po['EXPECTED START DATE'] && po['EXPECTED START DATE'] <= today);
+    const soon = open.filter(po => !late.includes(po) && !dueToday.includes(po) && po['EXPECTED START DATE'] && daysUntil(po['EXPECTED START DATE']) <= 7)
+      .sort((a, b) => a['EXPECTED START DATE'].localeCompare(b['EXPECTED START DATE']));
+    return { late, dueToday, soon, later: open.length - late.length - dueToday.length - soon.length };
   }
 
-  // ---- icons (stroke-based, 24px grid, matches the sidebar's rail icons) ----
-  const ICON_CHEVRON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>`;
-  const ICON_CLOCK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.2 2"/></svg>`;
-  const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-  const ICON_BOX = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/></svg>`;
-  const ICON_CLIPBOARD = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/></svg>`;
-  const ICON_CHECK_CIRCLE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.3l2.3 2.3 4.7-5"/></svg>`;
-  const ICON_STOCK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></svg>`;
+  function renderGoodsIn(gi) {
+    const lineCount = id => data.poLines.filter(l => l['PO ID'] === id).length;
+    const row = (po, kind) => {
+      const due = po['EXPECTED END DATE'] || po['EXPECTED START DATE'];
+      const label = kind === 'late' ? `Late ${plural(Math.max(1, -daysUntil(due)), 'day')}` : kind === 'today' ? 'Due today' : `Due ${dayName(po['EXPECTED START DATE'])}`;
+      return `
+        <div class="gi-row">
+          <a class="gi-main" href="purchase-orders.html?open=${encodeURIComponent(po.ID)}" data-po-id="${escapeHtml(po.ID)}">
+            <span class="code">${escapeHtml(po.ID)}</span>
+            <span class="gi-sup">${escapeHtml(po.SUPPLIER)}<small class="${kind === 'late' ? 'late' : ''}">${escapeHtml(label)} · ${plural(lineCount(po.ID), 'line')}</small></span>
+          </a>
+          ${kind !== 'soon' ? `<a class="btn sm${kind === 'today' ? '' : ' ghost'}" href="receiving.html">Receive</a>` : ''}
+        </div>`;
+    };
+    const rows = [...gi.late.map(po => row(po, 'late')), ...gi.dueToday.map(po => row(po, 'today')), ...gi.soon.map(po => row(po, 'soon'))];
+    document.getElementById('goodsInList').innerHTML = rows.length
+      ? rows.join('') + (gi.later ? `<div class="muted gi-more">${plural(gi.later, 'more purchase order')} due later.</div>` : '')
+      : `<p class="muted" style="margin:4px 0 0;">Nothing due in the next week.${gi.later ? ` ${plural(gi.later, 'purchase order')} due later.` : ''}</p>`;
+  }
 
-  // ---- dashboard data + rendering ----
+  // Short-dated lots and products under their reorder threshold, from stock
+  // on hand (Deliveries minus Allocations, as on the Stock page).
+  function stockAlerts() {
+    const lots = {};
+    data.deliveries.forEach(d => {
+      const k = `${d['PRODUCT CODE']} ${d['BATCH/LOT NUMBER']}`;
+      if (!lots[k]) lots[k] = { code: d['PRODUCT CODE'], bbe: d['BEST BEFORE DATE'], left: 0 };
+      lots[k].left += parseFloat(d['QTY RECEIVED']) || 0;
+      if (d['BEST BEFORE DATE'] && (!lots[k].bbe || d['BEST BEFORE DATE'] < lots[k].bbe)) lots[k].bbe = d['BEST BEFORE DATE'];
+    });
+    data.allocs.forEach(a => {
+      const k = `${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`;
+      if (lots[k] && !a['PO LINE ID']) lots[k].left -= parseFloat(a['QTY ALLOCATED']) || 0;
+    });
+    const inStock = Object.values(lots).filter(l => l.left > 0.0001);
+    const onHand = {};
+    inStock.forEach(l => { onHand[l.code] = (onHand[l.code] || 0) + l.left; });
+    return {
+      shortDated: inStock.filter(l => l.bbe && daysUntil(l.bbe) <= ALERT_SHORT_DAYS).length,
+      low: data.products.filter(p => {
+        const t = parseFloat(p['Reorder threshold']);
+        return t > 0 && (onHand[p['Product code']] || 0) < t;
+      }).length
+    };
+  }
 
-  let weekOffset = 0;
-  // The "Short-dated" panel lists lots with this many days or fewer left.
-  const SHORT_DATED_DAYS = 21;
-  let dash = null; // cached load — week nav re-renders from this without refetching
+  function renderAlerts(gi, stock, overdue, short) {
+    const chip = (n, text, href, kind) => n ? `<a class="alert-chip ${kind}" href="${href}"><i></i>${escapeHtml(text)}</a>` : '';
+    const html = [
+      chip(overdue, `${plural(overdue, 'order')} from earlier days not dispatched`, 'orders.html', 'crit'),
+      chip(gi.late.length, `${plural(gi.late.length, 'PO')} late`, 'purchase-orders.html', 'crit'),
+      chip(short, `${plural(short, 'order')} short of stock`, 'orders.html', 'crit'),
+      chip(stock.shortDated, `${plural(stock.shortDated, 'lot')} short-dated`, 'stock.html', 'yell'),
+      chip(stock.low, `${plural(stock.low, 'product')} low`, 'stock.html', 'plain')
+    ].join('');
+    document.getElementById('alerts').innerHTML = html || '<span class="alert-chip ok"><i></i>No stock alerts</span>';
+  }
+
+  function renderPhoneTasks(run, gi) {
+    const tile = (href, title, sub, n, icon, big) => `
+      <a class="task${big ? ' big' : ''}" href="${href}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>
+        <span class="task-b"><span class="task-t">${title}</span><span class="task-s">${sub}</span></span>
+        ${n ? `<span class="task-n">${n}</span>` : ''}
+      </a>`;
+    const q = run ? `?day=${run.date}` : '';
+    const inCount = gi.late.length + gi.dueToday.length;
+    document.getElementById('phoneTasks').innerHTML = `
+      ${run ? `<div class="task-run"><span>${escapeHtml(whenLabel(run.date))}</span><strong>${runTitle(run)} · ${plural(run.orders.length, 'order')}</strong></div>` : ''}
+      ${tile('cutting.html', 'Weigh cuts', run && run.toWeigh ? `${plural(run.toWeigh, 'piece')} · ${plural(run.weighOrders, 'order')}` : 'Nothing to weigh', run ? run.toWeigh : 0, '<path d="M5 20h14"/><path d="M12 4v4"/><path d="M6 8h12l-2 8H8z"/>', true)}
+      ${tile('receiving.html', 'Goods in', inCount ? `${plural(inCount, 'delivery', 'deliveries')} due` : 'None due', inCount, '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>')}
+      ${tile(`picking.html${q}`, 'Pick', run && run.pick.length ? `${plural(run.pick.length, 'order')} ready` : 'Nothing to pick', run ? run.pick.length : 0, '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>')}
+      ${tile(`lists.html${q}`, 'Pack', run && run.pack.length ? `${plural(run.pack.length, 'order')} ready` : 'Nothing to pack', run ? run.pack.length : 0, '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>')}
+      ${tile('stock-take.html', 'Stock take', 'Count the shelves', 0, '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>')}
+      <button type="button" class="task-office" id="officeViewBtn">Show the full office view</button>`;
+  }
 
   async function loadDashboard() {
     const cfg = getStoredConfig();
     const token = tryResumeSession();
     const card = document.getElementById('dashCard');
-    if (!token || !cfg.spreadsheetId) { card.style.display = 'none'; return; }
-    card.style.display = 'block';
+    const now = new Date();
+    document.getElementById('todayKicker').textContent =
+      `${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} · Week ${isoWeek(now)}`;
+    if (!token || !cfg.spreadsheetId) { card.hidden = true; return; }
+    card.hidden = false;
     setStatus('');
     try {
-      const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
-      const [productRows, deliveryRows, allocationRows, poRows, polRows, orderRows, lineRows] = await Promise.all([
-        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
-        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'PurchaseOrders!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'PurchaseOrderLines!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token)
-      ]);
-
-      const products = toObjects(productRows);
-      const productByCode = {};
-      products.forEach(p => { productByCode[p['Product code']] = p; });
-      registerProducts(products);
-      registerProductGroups(await groupsP);
-
-      // Batches currently in stock — Deliveries minus Allocations per
-      // product+lot, same computation as the Stock page.
-      const batchMap = {};
-      const bKey = (code, batch) => `${code} ${batch}`;
-      toObjects(deliveryRows).forEach(d => {
-        const k = bKey(d['PRODUCT CODE'], d['BATCH/LOT NUMBER']);
-        if (!batchMap[k]) batchMap[k] = { code: d['PRODUCT CODE'], batch: d['BATCH/LOT NUMBER'], unit: d.UNIT || 'kg', bbe: d['BEST BEFORE DATE'], received: 0, allocated: 0 };
-        batchMap[k].received += parseFloat(d['QTY RECEIVED']) || 0;
-        if (d['BEST BEFORE DATE'] && (!batchMap[k].bbe || d['BEST BEFORE DATE'] < batchMap[k].bbe)) batchMap[k].bbe = d['BEST BEFORE DATE'];
-      });
-      toObjects(allocationRows).forEach(a => {
-        const k = bKey(a['PRODUCT CODE'], a['BATCH/LOT NUMBER']);
-        if (batchMap[k]) batchMap[k].allocated += parseFloat(a['QTY ALLOCATED']) || 0;
-      });
-      const batches = Object.values(batchMap)
-        .map(b => ({ ...b, remaining: b.received - b.allocated }))
-        .filter(b => b.remaining > 0.0001);
-
-      const onHandByCode = {};
-      batches.forEach(b => { onHandByCode[b.code] = (onHandByCode[b.code] || 0) + b.remaining; });
-
-      const poLineCountById = {};
-      toObjects(polRows).forEach(l => { poLineCountById[l['PO ID']] = (poLineCountById[l['PO ID']] || 0) + 1; });
-      const orderLineCountById = {};
-      toObjects(lineRows).forEach(l => { orderLineCountById[l['ORDER ID']] = (orderLineCountById[l['ORDER ID']] || 0) + 1; });
-
-      dash = {
-        products, productByCode, batches, onHandByCode,
-        purchaseOrders: toObjects(poRows), poLineCountById, poLines: toObjects(polRows),
-        orders: toObjects(orderRows), orderLineCountById, orderLines: toObjects(lineRows)
-      };
-
-      renderWeekBand();
-      renderUpcomingDeliveries();
-      renderCustomerOrders();
-      renderStockAlerts();
-      updateDashBoxes();
-      setStatus('');
+      data = await loadListsData(cfg.spreadsheetId, token);
+      const { first, second } = pickRuns();
+      const run = first ? runOf(first) : null;
+      const gi = goodsIn();
+      const today = todayIso();
+      const undispatched = data.orders.filter(o => statusOf(o) !== 'Dispatched');
+      const overdue = undispatched.filter(o => o['DELIVERY DATE'] && o['DELIVERY DATE'] < today).length;
+      const short = undispatched.filter(o => packLines(o).some(l => l.short)).length;
+      renderAlerts(gi, stockAlerts(), overdue, short);
+      renderRunToday(run);
+      renderRunNext(second ? runOf(second) : null);
+      renderGoodsIn(gi);
+      renderPhoneTasks(run, gi);
     } catch (err) {
-      setStatus('Error loading dashboard: ' + err.message, 'error');
+      setStatus('Error loading: ' + err.message, 'error');
     }
   }
 
-  // Week-scoped: everything in this band re-filters to the selected week.
-  function renderWeekBand() {
-    if (!dash) return;
-    const { start, end } = weekRange(weekOffset);
-    const startIso = isoDate(start), endIso = isoDate(end);
-    const isCurrent = weekOffset === 0;
-
-    const kicker = document.getElementById('wkKicker');
-    kicker.textContent = isCurrent ? `This week · ${fmtWeekRange(start, end)}` : `Week of ${fmtWeekRange(start, end)}`;
-    kicker.classList.toggle('away', !isCurrent);
-    document.getElementById('wkHeading').textContent = isCurrent ? "This week's snapshot" : `Snapshot — week of ${fmtWeekRange(start, end)}`;
-    document.getElementById('wkJump').style.display = isCurrent ? 'none' : 'inline-flex';
-
-    const ordersInWeek = dash.orders.filter(o => dateInRange(o['DELIVERY DATE'], startIso, endIso));
-    const pending = ordersInWeek.filter(o => (o.STATUS || 'New') === 'New').length;
-    const confirmed = ordersInWeek.length - pending;
-
-    const deliveriesExpected = dash.purchaseOrders.filter(po => {
-      if (po.STATUS === 'Cancelled') return false;
-      const s = po['EXPECTED START DATE'];
-      if (!s) return false;
-      return rangesOverlap(s, po['EXPECTED END DATE'] || s, startIso, endIso);
-    }).length;
-
-    const lotsExpiring = dash.batches.filter(b => dateInRange(b.bbe, startIso, endIso)).length;
-
-    document.getElementById('wkStats').innerHTML = `
-      <div class="stat"><span class="l">Customer orders</span><span class="n">${ordersInWeek.length}</span></div>
-      <div class="stat"><span class="l">Pending</span><span class="n">${pending}</span></div>
-      <div class="stat"><span class="l">Confirmed</span><span class="n">${confirmed}</span></div>
-      <div class="stat"><span class="l">Deliveries expected</span><span class="n">${deliveriesExpected}</span></div>
-      <div class="stat${lotsExpiring > 0 ? ' bad' : ''}"><span class="l">Lots expiring</span><span class="n">${lotsExpiring}</span></div>
-    `;
-  }
-
-  // Live, split by date: POs still awaiting delivery whose expected window
-  // falls in the current week, and — separately — open POs already past the
-  // end of their window (late), most overdue first. A PO due in a later week
-  // shows in neither; the week band above counts those.
-  function poRowHtml(po, late) {
-    const due = po['EXPECTED END DATE'] || po['EXPECTED START DATE'];
-    const daysLate = late ? Math.max(1, -daysUntil(due)) : 0;
-    return `
-      <a class="lrow" href="purchase-orders.html?open=${encodeURIComponent(po.ID)}" data-po-id="${escapeHtml(po.ID)}">
-        <div class="lrow-body">
-          <div class="lrow-name">${escapeHtml(po.SUPPLIER)} <span class="code" style="margin-left:6px;">${escapeHtml(po.ID)}</span></div>
-          <div class="lrow-meta">${late ? 'Was due ' : ''}${escapeHtml(fmtDateRange(po['EXPECTED START DATE'], po['EXPECTED END DATE']))} &middot; ${dash.poLineCountById[po.ID] || 0} item(s)</div>
-        </div>
-        <div class="lrow-side">
-          ${late ? `<span class="tag t-crit">${daysLate} day${daysLate === 1 ? '' : 's'} late</span>` : ''}
-          <span class="lrow-chev">${ICON_CHEVRON}</span>
-        </div>
-      </a>`;
-  }
-
-  function renderUpcomingDeliveries() {
-    const { start, end } = weekRange(0);
-    const startIso = isoDate(start), endIso = isoDate(end), todayIso = isoDate(new Date());
-    const open = dash.purchaseOrders.filter(o => o.STATUS === 'Ordered' || !o.STATUS);
-    const dueBy = po => po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '';
-    const late = open.filter(po => dueBy(po) && dueBy(po) < todayIso)
-      .sort((a, b) => dueBy(a).localeCompare(dueBy(b)));
-    const thisWeek = open.filter(po => !late.includes(po) && po['EXPECTED START DATE']
-        && rangesOverlap(po['EXPECTED START DATE'], dueBy(po), startIso, endIso))
-      .sort((a, b) => a['EXPECTED START DATE'].localeCompare(b['EXPECTED START DATE']));
-    const later = open.filter(po => !late.includes(po) && !thisWeek.includes(po)).length;
-
-    document.getElementById('upcomingCount').textContent = `${late.length ? late.length + ' late · ' : ''}${thisWeek.length}`;
-    document.getElementById('lateSection').hidden = !late.length;
-    document.getElementById('lateCount').textContent = late.length || '';
-    document.getElementById('lateList').innerHTML = late.map(po => poRowHtml(po, true)).join('');
-
-    document.getElementById('upcomingTitle').textContent = `Deliveries this week · ${fmtWeekRange(start, end)}`;
-    const list = document.getElementById('upcomingList');
-    if (!thisWeek.length) {
-      list.innerHTML = `
-        <div class="empty-block">
-          <div class="empty-icon">${ICON_BOX}</div>
-          <div class="empty-title">No deliveries due this week</div>
-          <div class="empty-sub">${later ? `${later} purchase order(s) are due in later weeks — use the week arrows above to see them.` : "Deliveries you're expecting from suppliers will show up here."}</div>
-          <a href="purchase-orders.html" class="btn ghost sm">+ New purchase order</a>
-        </div>`;
-      return;
-    }
-    list.innerHTML = thisWeek.map(po => poRowHtml(po, false)).join('')
-      + (later ? `<div class="lrow-foot muted">${later} more purchase order(s) due in later weeks.</div>` : '');
-  }
-
-  // Live: open (not yet Dispatched) customer orders — clicking a row deep
-  // links into orders.html and opens that exact order's detail dialog.
-  function renderCustomerOrders() {
-    const list = document.getElementById('custOrdersList');
-    const open = dash.orders
-      .filter(o => o.STATUS !== 'Dispatched')
-      .sort((a, b) => (a['DELIVERY DATE'] || '9999').localeCompare(b['DELIVERY DATE'] || '9999'));
-    document.getElementById('ordersCount').textContent = open.length || '';
-
-    if (!open.length) {
-      list.innerHTML = `
-        <div class="empty-block">
-          <div class="empty-icon">${ICON_CLIPBOARD}</div>
-          <div class="empty-title">No open customer orders</div>
-          <div class="empty-sub">New orders you place will show up here until they're dispatched.</div>
-          <a href="orders.html" class="btn ghost sm">+ New customer order</a>
-        </div>`;
-      return;
-    }
-    list.innerHTML = open.map(o => {
-      const pending = (o.STATUS || 'New') === 'New';
-      return `
-      <a class="lrow" href="orders.html?open=${encodeURIComponent(o.ID)}" data-order-id="${escapeHtml(o.ID)}">
-        <span class="lrow-icon ${pending ? 'pending' : 'confirmed'}">${pending ? ICON_CLOCK : ICON_CHECK}</span>
-        <div class="lrow-body">
-          <div class="lrow-name">${escapeHtml(o.CUSTOMER)}</div>
-          <div class="lrow-meta">${o['DELIVERY DATE'] ? 'Delivery ' + escapeHtml(fmtDateShort(o['DELIVERY DATE'])) : 'No delivery date set'} &middot; ${dash.orderLineCountById[o.ID] || 0} item(s)</div>
-        </div>
-        <div class="lrow-side">
-          <span class="tag ${pending ? 't-warn' : 't-ok'}">${pending ? 'Pending' : 'Confirmed'}</span>
-          <span class="lrow-chev">${ICON_CHEVRON}</span>
-        </div>
-      </a>`;
-    }).join('');
-  }
-
-  // Live: short-dated lots — anything in stock with under 3 weeks
-  // (SHORT_DATED_DAYS) left, or already past its best-before, soonest first,
-  // so sales and the shops can push it in time (independent of the week
-  // switcher above) — and low stock (on-hand below each product's own
-  // Reorder threshold) — see Products for that field.
-  function renderStockAlerts() {
-    const expiring = dash.batches
-      .filter(b => b.bbe && daysUntil(b.bbe) <= SHORT_DATED_DAYS)
-      .sort((a, b) => a.bbe.localeCompare(b.bbe));
-
-    document.getElementById('expiringCount').textContent = expiring.length || '';
-    const expList = document.getElementById('expiringList');
-    expList.innerHTML = !expiring.length ? `
-      <div class="empty-block">
-        <div class="empty-icon">${ICON_CHECK_CIRCLE}</div>
-        <div class="empty-title">Nothing short-dated</div>
-        <div class="empty-sub">Every lot in stock has more than 3 weeks of shelf life.</div>
-      </div>` : expiring.map(b => {
-      const days = daysUntil(b.bbe);
-      const prod = dash.productByCode[b.code];
-      return `
-      <div class="arow">
-        ${productCell(prod, `
-          <div class="arow-name">${escapeHtml(prod ? prod['Product name'] : b.code)}</div>
-          <div class="arow-sub code">Lot ${escapeHtml(b.batch)} · ${escapeHtml(qtyUnit(Math.round(b.remaining * 100) / 100, b.unit))} left</div>`)}
-        <span class="tag ${days <= 7 ? 't-crit' : days <= 14 ? 't-warn' : 't-yell'}">${days < 0 ? 'Past best-before' : days + 'd left'}</span>
-      </div>`;
-    }).join('');
-
-    const low = dash.products
-      .map(p => ({ p, onHand: dash.onHandByCode[p['Product code']] || 0, threshold: parseFloat(p['Reorder threshold']) }))
-      .filter(x => !isNaN(x.threshold) && x.threshold > 0 && x.onHand < x.threshold)
-      .sort((a, b) => (a.onHand - a.threshold) - (b.onHand - b.threshold));
-
-    document.getElementById('lowStockCount').textContent = low.length || '';
-    const lowList = document.getElementById('lowStockList');
-    lowList.innerHTML = !low.length ? `
-      <div class="empty-block">
-        <div class="empty-icon">${ICON_STOCK}</div>
-        <div class="empty-title">Everything's well stocked</div>
-        <div class="empty-sub">No products below their reorder threshold right now.</div>
-      </div>` : low.map(({ p, onHand }) => {
-      const unit = p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc';
-      return `
-      <div class="arow">
-        ${productCell(p, `
-          <div class="arow-name">${escapeHtml(p['Product name'])}</div>
-          <div class="arow-sub">${escapeHtml(p.Category || '')}</div>`)}
-        <span class="tag t-warn">${onHand.toFixed(unit === 'kg' ? 1 : 0)}${unit === 'kg' ? 'kg' : ' ' + unitLabel(unit)} left</span>
-      </div>`;
-    }).join('');
-  }
-
-  document.getElementById('wkPrev').addEventListener('click', () => { weekOffset--; renderWeekBand(); });
-  document.getElementById('wkNext').addEventListener('click', () => { weekOffset++; renderWeekBand(); });
-  document.getElementById('wkJump').addEventListener('click', (e) => { e.preventDefault(); weekOffset = 0; renderWeekBand(); });
-
-  // ---- the four "Right now" boxes: compact by default, one click to see
-  // everything (the box spans the full width); click again to fold it ----
-  function updateDashBoxes() {
-    document.querySelectorAll('.dash-box').forEach(box => {
-      const body = box.querySelector('.db-body');
-      const more = box.querySelector('.db-more');
-      const expanded = box.classList.contains('expanded');
-      const overflowing = body.scrollHeight > body.clientHeight + 2;
-      const rows = body.querySelectorAll('.lrow, .arow').length;
-      more.hidden = !expanded && !overflowing;
-      more.textContent = expanded ? 'Show less' : `Show all ${rows}`;
-      box.classList.toggle('fades', !expanded && overflowing);
-      box.querySelectorAll('[data-expand].db-expand').forEach(b => {
-        b.hidden = !expanded && !overflowing; // nothing more to show
-        b.title = b.ariaLabel = expanded ? 'Collapse' : 'Expand';
-      });
-    });
-  }
-  document.querySelector('.dash-grid').addEventListener('click', e => {
-    const btn = e.target.closest('[data-expand]');
-    if (!btn) return;
-    const box = btn.closest('.dash-box');
-    box.classList.toggle('expanded');
-    updateDashBoxes();
-    if (box.classList.contains('expanded')) box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  // Phones get the warehouse buttons; "Show the full office view" swaps to the
+  // laptop layout and is remembered on that phone.
+  const OFFICE_KEY = 'provisions_officeView';
+  try { if (localStorage.getItem(OFFICE_KEY) === '1') document.body.classList.add('office-view'); } catch (e) {}
+  document.getElementById('dashCard').addEventListener('click', e => {
+    if (!e.target.closest('#officeViewBtn, #taskViewBtn')) return;
+    const on = document.body.classList.toggle('office-view');
+    try { localStorage.setItem(OFFICE_KEY, on ? '1' : '0'); } catch (err) {}
+    window.scrollTo(0, 0);
   });
-  window.addEventListener('resize', () => { if (dash) updateDashBoxes(); });
 
-  const hoverLine = (code, qty, unit) => {
-    const prod = dash.productByCode[code];
-    return { product: prod, name: prod ? prod['Product name'] : code, qty: qtyUnit(qty, unit) };
-  };
-  const poHoverCard = el => {
-    const o = dash && dash.purchaseOrders.find(p => p.ID === el.dataset.poId);
+  attachOrderHoverCard(document.getElementById('goodsInList'), '[data-po-id]', el => {
+    const o = data && data.purchaseOrders.find(p => p.ID === el.dataset.poId);
     if (!o) return null;
     return {
       title: o.SUPPLIER, id: o.ID, status: o.STATUS || 'Ordered',
-      meta: [`Expected ${fmtDateRange(o['EXPECTED START DATE'], o['EXPECTED END DATE'])}`, o.NOTES ? `Note: ${o.NOTES}` : ''],
-      lines: dash.poLines.filter(l => l['PO ID'] === o.ID).map(l => hoverLine(l['PRODUCT CODE'], l['QTY ORDERED'], l.UNIT))
-    };
-  };
-  attachOrderHoverCard(document.getElementById('upcomingList'), '[data-po-id]', poHoverCard);
-  attachOrderHoverCard(document.getElementById('lateList'), '[data-po-id]', poHoverCard);
-  attachOrderHoverCard(document.getElementById('custOrdersList'), '[data-order-id]', el => {
-    const o = dash && dash.orders.find(x => x.ID === el.dataset.orderId);
-    if (!o) return null;
-    return {
-      title: o.CUSTOMER, id: o.ID, status: o.STATUS || 'New',
-      meta: [
-        o['DELIVERY DATE'] ? `Delivery ${fmtDateShort(o['DELIVERY DATE'])}` : 'No delivery date set',
-        o['PLACED BY'] ? `Placed by ${o['PLACED BY']}` : '',
-        o.NOTES ? `Note: ${o.NOTES}` : ''
-      ],
-      lines: dash.orderLines.filter(l => l['ORDER ID'] === o.ID).map(l => hoverLine(l['PRODUCT CODE'], l['QTY ORDERED'], l.UNIT))
+      meta: [o.NOTES ? `Note: ${o.NOTES}` : ''],
+      lines: data.poLines.filter(l => l['PO ID'] === o.ID).map(l => {
+        const prod = data.productByCode[l['PRODUCT CODE']];
+        return { product: prod, name: prod ? prod['Product name'] : l['PRODUCT CODE'], qty: qtyUnit(l['QTY ORDERED'], l.UNIT) };
+      })
     };
   });
 
@@ -502,7 +390,7 @@
     loadDashboard();
   });
   // An order or PO opened in place (js/shell.js) may have changed status,
-  // lines or stock — re-read so the panels match.
+  // lines or stock — re-read so the page matches.
   window.onRecordDialogClosed = loadDashboard;
 
   signInBtn.addEventListener('click', () => {

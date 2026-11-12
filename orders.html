@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=46">
+<link rel="stylesheet" href="css/style.css?v=48">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -19,25 +19,34 @@
 <header class="topbar no-print" id="topbar"></header>
 
 <main>
-  <h2>Orders</h2>
 
   <div id="signedOutNotice" class="note" style="display:none;">
     Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
   </div>
 
   <div id="ordersCard" style="display:none;">
-    <div class="panel-h" style="border:none; background:none; padding:0 0 8px;">
-      <h3 style="text-transform:none; letter-spacing:normal; font-size:15px; color:var(--ink); font-weight:600;">Orders</h3>
-      <button type="button" class="btn add-btn sm" id="newOrderBtn" style="margin:0;">+ Add order</button>
+    <div class="ord-bar">
+      <div class="cat-tabs" id="viewTabs" role="tablist" aria-label="View">
+        <button type="button" class="cat-tab" data-view="board" role="tab">Pipeline</button>
+        <button type="button" class="cat-tab" data-view="list" role="tab">All orders</button>
+      </div>
+      <div class="cat-tabs" id="dayTabs" role="tablist" aria-label="Delivery day"></div>
+      <span style="flex:1"></span>
       <button type="button" class="btn ghost sm" id="reloadBtn" style="margin:0;">Reload</button>
+      <button type="button" class="btn add-btn sm" id="newOrderBtn" style="margin:0;">+ New order</button>
     </div>
-    <div class="cat-tabs" id="statusTabs" role="tablist" aria-label="Filter by status" style="margin-bottom:12px; width:fit-content; max-width:100%;"></div>
-    <div class="panel"><div class="scroll" style="overflow-x:auto;">
-      <table id="ordersTable">
-        <thead><tr><th>ID</th><th>Customer</th><th>Delivery date</th><th>Status</th><th>Placed by</th><th class="num">Items</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div></div>
+    <!-- Pipeline: one column per status for one delivery day, each with the
+         printouts and screens for that stage. -->
+    <div id="boardView" class="board-wrap"><div class="board" id="board"></div></div>
+    <div id="listView">
+      <div class="cat-tabs" id="statusTabs" role="tablist" aria-label="Filter by status" style="margin-bottom:12px; width:fit-content; max-width:100%;"></div>
+      <div class="panel"><div class="scroll" style="overflow-x:auto;">
+        <table id="ordersTable">
+          <thead><tr><th>ID</th><th>Customer</th><th>Delivery date</th><th>Status</th><th>Placed by</th><th class="num">Items</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div></div>
+    </div>
     <div id="status" class="mono" style="margin-top:8px; font-size:12.5px; color:var(--steel);"></div>
   </div>
 </main>
@@ -53,7 +62,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=11"></script>
+<script src="js/shell.js?v=12"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=4"></script>
 <script src="js/product-ui.js?v=4"></script>
@@ -249,6 +258,7 @@
   });
 
   function renderTable() {
+    renderView();
     const tbody = document.querySelector('#ordersTable tbody');
     renderStatusTabs();
     if (!ordersData.length) {
@@ -276,12 +286,131 @@
     }).join('');
   }
 
+  // ---- Pipeline board ----
+  // One delivery day's orders in a column per status. Each column carries the
+  // screens and printouts for that stage, so the warehouse lists are reached
+  // from here rather than from the menu. View and day are remembered.
+  const VIEW_KEY = 'provisions_ordersView';
+  let ordersView = (() => { try { return localStorage.getItem(VIEW_KEY) || 'board'; } catch (e) { return 'board'; } })();
+  let boardDay = (() => {
+    const d = new URLSearchParams(location.search).get('day');
+    if (d) ordersView = 'board';
+    return /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : '';
+  })();
+  const STAGE_ACTIONS = {
+    New: day => [['Allocate on each order', null]],
+    Allocated: day => [['Picking list', `picking.html${day}`], ['Cutting list', `cutting-list.html${day}`]],
+    Picked: () => [['Weigh cuts', 'cutting.html']],
+    Cut: day => [['Packing slips', `lists.html${day}`]],
+    Packed: day => [['Day sheet', `day-sheet.html${day}`], ['Delivery notes', `lists.html${day}`]],
+    Dispatched: day => [['Export to Xero', `lists.html${day}`]]
+  };
+  const isoToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const dayShort = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  // Days worth a tab: any with undispatched orders, today, and the next
+  // couple of booked days, in date order.
+  function boardDays() {
+    const today = isoToday();
+    const byDay = {};
+    ordersData.forEach(r => { const d = r.obj['DELIVERY DATE']; if (d) (byDay[d] = byDay[d] || []).push(r.obj); });
+    const days = Object.keys(byDay).sort().filter(d => d === today || d === boardDay || byDay[d].some(o => statusOf(o) !== 'Dispatched'));
+    return { days, byDay };
+  }
+
+  function cardFlags(o, productByCode) {
+    const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === o.ID).map(l => l.obj);
+    let toWeigh = 0, short = 0;
+    const awaiting = new Set();
+    lines.forEach(l => {
+      const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID).map(a => a.obj);
+      allocs.filter(a => a['PO LINE ID']).forEach(a => {
+        const pl = poLines.find(x => x.ID === a['PO LINE ID']);
+        awaiting.add(pl ? pl['PO ID'] : 'PO');
+      });
+      const src = weighSource(l, productByCode);
+      if (src) {
+        toWeigh += Math.max(0, linePieces(l, src).count - cutsData.filter(c => c.obj['ORDER LINE ID'] === l.ID).length);
+      } else if (allocs.reduce((s, a) => s + (parseFloat(a['QTY ALLOCATED']) || 0), 0) + 0.0001 < (parseFloat(l['QTY ORDERED']) || 0)) {
+        short++;
+      }
+    });
+    return { lines: lines.length, toWeigh, short, awaiting: [...awaiting] };
+  }
+
+  function renderBoard() {
+    const { days, byDay } = boardDays();
+    const today = isoToday();
+    if (!boardDay || !days.includes(boardDay)) boardDay = days.find(d => d >= today) || days[days.length - 1] || '';
+    document.getElementById('dayTabs').innerHTML = days.length ? days.map(d => {
+      const open = byDay[d].filter(o => statusOf(o) !== 'Dispatched').length;
+      return `<button type="button" class="cat-tab${d === boardDay ? ' active' : ''}${d < today && open ? ' overdue' : ''}" data-day="${d}" role="tab" aria-selected="${d === boardDay}">
+        ${d === today ? 'Today · ' : ''}${escapeHtml(dayShort(d))}<span class="n">${byDay[d].length}</span></button>`;
+    }).join('') : '';
+    const orders = boardDay ? byDay[boardDay] || [] : [];
+    const q = boardDay ? `?day=${boardDay}` : '';
+    const productByCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
+    document.getElementById('board').innerHTML = ORDER_STATUSES.map(stage => {
+      const cards = orders.filter(o => statusOf(o) === stage).sort((a, b) => a.CUSTOMER.localeCompare(b.CUSTOMER));
+      const acts = STAGE_ACTIONS[stage](q);
+      return `
+        <section class="col" aria-label="${stage}">
+          <div class="col-h"><span class="col-dot s-${stage.toLowerCase()}"></span><h3>${stage}</h3><span class="col-n">${cards.length}</span></div>
+          <div class="col-acts">${acts.map(([label, href]) => href
+            ? `<a class="col-act" href="${href}">${escapeHtml(label)}</a>`
+            : `<span class="col-hint">${escapeHtml(label)}</span>`).join('')}</div>
+          ${cards.map(o => {
+            const f = cardFlags(o, productByCode);
+            const meta = [plural(f.lines, 'line'), f.toWeigh ? `${plural(f.toWeigh, 'piece')} to weigh` : '', o['DROP ORDER'] ? `Drop ${o['DROP ORDER']}` : ''].filter(Boolean).join(' · ');
+            return `
+            <button type="button" class="ocard" data-id="${escapeHtml(o.ID)}">
+              <span class="ocard-top"><span class="ocard-c">${escapeHtml(o.CUSTOMER)}</span><span class="code">${escapeHtml(o.ID)}</span></span>
+              <span class="ocard-m">${escapeHtml(meta)}</span>
+              ${f.short ? `<span class="tag t-warn">${plural(f.short, 'line')} short</span>` : ''}
+              ${f.awaiting.map(id => `<span class="tag t-yell">Awaiting ${escapeHtml(id)}</span>`).join('')}
+            </button>`;
+          }).join('') || '<p class="col-empty">Nothing here.</p>'}
+        </section>`;
+    }).join('');
+    if (!days.length) document.getElementById('board').innerHTML = `<p class="muted">No orders booked. Use + New order to place one.</p>`;
+  }
+  const plural = (n, one) => `${n} ${n === 1 ? one : one + 's'}`;
+
+  function renderView() {
+    document.querySelectorAll('#viewTabs [data-view]').forEach(b => {
+      const on = b.dataset.view === ordersView;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on);
+    });
+    document.getElementById('boardView').hidden = ordersView !== 'board';
+    document.getElementById('dayTabs').hidden = ordersView !== 'board';
+    document.getElementById('listView').hidden = ordersView === 'board';
+    if (ordersView === 'board') renderBoard();
+  }
+  document.getElementById('viewTabs').addEventListener('click', e => {
+    const b = e.target.closest('[data-view]');
+    if (!b) return;
+    ordersView = b.dataset.view;
+    try { localStorage.setItem(VIEW_KEY, ordersView); } catch (err) {}
+    renderView();
+  });
+  document.getElementById('dayTabs').addEventListener('click', e => {
+    const b = e.target.closest('[data-day]');
+    if (!b) return;
+    boardDay = b.dataset.day;
+    renderBoard();
+  });
+  document.getElementById('board').addEventListener('click', e => {
+    const c = e.target.closest('.ocard[data-id]');
+    if (c) openViewDialog(c.dataset.id);
+  });
+
   document.getElementById('ordersTable').addEventListener('click', (e) => {
     const tr = e.target.closest('tr[data-id]');
     if (tr) openViewDialog(tr.dataset.id);
   });
 
-  attachOrderHoverCard(document.getElementById('ordersTable'), 'tr[data-id]', tr => {
+  const orderHover = tr => {
     const order = ordersData.find(r => r.obj.ID === tr.dataset.id);
     if (!order) return null;
     const o = order.obj;
@@ -298,14 +427,23 @@
         qty: qtyUnit(l.obj['QTY ORDERED'], l.obj.UNIT)
       }))
     };
-  });
+  };
+  attachOrderHoverCard(document.getElementById('ordersTable'), 'tr[data-id]', orderHover);
+  attachOrderHoverCard(document.getElementById('board'), '.ocard[data-id]', orderHover);
 
   // Deep link from the Dashboard/Lists pages (?open=ORD001) — opens straight
   // into that order's view. Safe to call after every loadAll(): the query
   // param is stripped from the URL the first time, so later reloads (e.g.
   // after allocating stock) just find nothing to do.
   function checkDeepLink() {
-    const id = new URLSearchParams(location.search).get('open');
+    const params = new URLSearchParams(location.search);
+    // "+ New order" in the top bar (js/shell.js) links to ?new=1.
+    if (params.has('new')) {
+      history.replaceState(null, '', location.pathname);
+      document.getElementById('newOrderBtn').click();
+      return;
+    }
+    const id = params.get('open');
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     if (ordersData.some(r => r.obj.ID === id)) openViewDialog(id);

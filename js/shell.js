@@ -16,67 +16,81 @@
 (function () {
   const ICON = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
-  // A single page sits straight in the bar; a [title, pages] pair is a dropdown,
-  // its pages in working order. Setup lives in the account menu.
+  // Five sections in the bar. Each section's pages show as tabs under the bar
+  // while you're in it. Pages marked 'warehouse' are steps of the week's run
+  // (cutting, weighing, picking, packing): they're reached from the Orders
+  // pipeline and the Today page, so they only get a tab while you're on them —
+  // on a phone they're grouped as Warehouse. Setup lives in the account menu.
+  // [href, label, icon, group?]
   const NAV = [
-    ['index.html', 'Dashboard', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'],
-    ['Sales', [
+    { label: 'Today', pages: [
+      ['index.html', 'Today', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>']
+    ] },
+    { label: 'Orders', pages: [
       ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],
-      ['day-sheet.html', 'Day sheet', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M8 14h3M13 14h3M8 17h3"/>'],
-      ['cutting-list.html', 'Cutting list', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>'],
-      ['cutting.html', 'Weigh cuts', '<path d="M5 20h14"/><path d="M12 4v4"/><path d="M6 8h12l-2 8H8z"/>'],
-      ['picking.html', 'Picking', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>'],
-      ['lists.html', 'Packing', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>']
-    ]],
-    ['Buying', [
-      ['purchase-orders.html', 'Purchase orders', '<path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'],
-      ['receiving.html', 'Goods in', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>']
-    ]],
-    ['Stock', [
-      ['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
-      ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>']
-    ]],
-    ['Records', [
-      ['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
-      ['suppliers.html', 'Suppliers', '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/>'],
       ['customers.html', 'Customers', '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.2 6.5-6.2s6.5 2.6 6.5 6.2"/><circle cx="17.5" cy="9" r="2.3"/><path d="M15.8 13.5c2.6.5 4.2 2.4 4.2 5"/>'],
+      ['picking.html', 'Picking', '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>', 'warehouse'],
+      ['cutting-list.html', 'Cutting list', '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17"/><path d="M8 15.5L20 7"/>', 'warehouse'],
+      ['cutting.html', 'Weigh cuts', '<path d="M5 20h14"/><path d="M12 4v4"/><path d="M6 8h12l-2 8H8z"/>', 'warehouse'],
+      ['lists.html', 'Packing', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>', 'warehouse'],
+      ['day-sheet.html', 'Day sheet', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M8 14h3M13 14h3M8 17h3"/>', 'warehouse']
+    ] },
+    { label: 'Stock', pages: [
+      ['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
+      ['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
+      ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>'],
+      ['trace.html', 'Lot trace', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>', 'hidden']
+    ] },
+    { label: 'Buying', pages: [
+      ['purchase-orders.html', 'Purchase orders', '<path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'],
+      ['receiving.html', 'Goods in', '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'],
+      ['suppliers.html', 'Suppliers', '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/>'],
       ['transport.html', 'Transport', '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>']
-    ]],
-    ['reports.html', 'Reports', '<path d="M4 19h16"/><path d="M5 15l4-4 3 3 6-7"/><path d="M15 7h3v3"/>']
+    ] },
+    { label: 'Reports', pages: [
+      ['reports.html', 'Reports', '<path d="M4 19h16"/><path d="M5 15l4-4 3 3 6-7"/><path d="M15 7h3v3"/>']
+    ] }
   ];
+  window.APP_NAV = NAV;
 
   const page = location.pathname.split('/').pop() || 'index.html';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ALL_PAGES = NAV.flatMap(sec => sec.pages.map(p => ({ href: p[0], label: p[1], icon: p[2], group: p[3] || '', section: sec.label })));
 
   // ---- Top bar
   function renderTopbar() {
     const bar = document.getElementById('topbar');
     if (!bar) return;
-    const isGroup = entry => Array.isArray(entry[1]);
-    const pagesOf = entry => isGroup(entry) ? entry[1] : [entry];
-    const here = NAV.flatMap(pagesOf).find(([href]) => href === page);
-    const pageLink = ([href, label, icon]) =>
-      `<a href="${href}"${href === page ? ' class="active" aria-current="page"' : ''}>${ICON(icon)}<span>${label}</span></a>`;
-    const chevron = '<svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-    const links = NAV.map(entry => !isGroup(entry) ? pageLink(entry) : `
-      <details class="nav-menu">
-        <summary${entry[1].some(([href]) => href === page) ? ' class="active"' : ''}>${entry[0]}${chevron}</summary>
-        <div class="nav-drop">${entry[1].map(pageLink).join('')}</div>
-      </details>`).join('');
-    // On a phone the whole nav is one menu, every page a large target.
-    const phoneLinks = NAV.map(entry => isGroup(entry)
-      ? `<div class="nav-phone-group"><div class="nav-phone-h">${entry[0]}</div>${entry[1].map(pageLink).join('')}</div>`
-      : `<div class="nav-phone-group">${pageLink(entry)}</div>`).join('');
+    const here = ALL_PAGES.find(p => p.href === page);
+    const hereSection = here ? here.section : (page === 'setup.html' || page === 'test-data.html' ? '' : 'Today');
+    const ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+    const links = NAV.map(sec => {
+      const on = sec.label === hereSection;
+      return `<a href="${sec.pages[0][0]}"${on ? ' class="active"' : ''}${on && sec.pages[0][0] === page ? ' aria-current="page"' : ''}>${sec.label}</a>`;
+    }).join('');
+    const pageLink = p =>
+      `<a href="${p.href}"${p.href === page ? ' class="active" aria-current="page"' : ''}>${ICON(p.icon)}<span>${p.label}</span></a>`;
+    // On a phone the whole nav is one menu, every page a large target; the
+    // week's run steps get their own Warehouse group.
+    const phoneGroups = NAV.flatMap(sec => {
+      const main = ALL_PAGES.filter(p => p.section === sec.label && p.group !== 'warehouse' && p.group !== 'hidden');
+      const ware = ALL_PAGES.filter(p => p.section === sec.label && p.group === 'warehouse');
+      return [[sec.label, main], ...(ware.length ? [['Warehouse', ware]] : [])];
+    });
+    const phoneLinks = phoneGroups.map(([title, pages]) =>
+      `<div class="nav-phone-group">${pages.length > 1 || title === 'Warehouse' ? `<div class="nav-phone-h">${title}</div>` : ''}${pages.map(pageLink).join('')}</div>`).join('');
     bar.innerHTML = `
-      <a class="brand" href="index.html" aria-label="Provisions — Dashboard">
+      <a class="brand" href="index.html" aria-label="Provisions — Today">
         <span class="brand-mark"><img src="img/logo.png" alt=""></span>
         <span class="brand-name">Provisions</span>
       </a>
       <nav class="nav" aria-label="Main">${links}</nav>
       <details class="nav-menu nav-phone">
-        <summary aria-label="Menu${here ? ', on ' + here[1] : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>${here ? here[1] : 'Menu'}</span></summary>
+        <summary aria-label="Menu${here ? ', on ' + here.label : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>${here ? here.label : 'Menu'}</span></summary>
         <nav class="nav-drop" aria-label="Main">${phoneLinks}</nav>
       </details>
+      <button type="button" class="tb-search" data-cmdk aria-label="Search (Ctrl+K)">${ICON_SEARCH}<span class="tb-search-t">Search pages, orders, lots</span><kbd>${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl '}K</kbd></button>
+      <a class="tb-new" href="orders.html?new=1">+ New order</a>
       <details class="account">
         <summary class="avatar" aria-label="Account"><span data-initial>·</span></summary>
         <div class="menu">
@@ -87,9 +101,28 @@
         </div>
       </details>
       <div class="net-bar" aria-hidden="true"></div>`;
+
+    // The section's pages as tabs under the bar (a run step only while you're on it).
+    const sec = NAV.find(s => s.label === hereSection);
+    const tabs = sec ? ALL_PAGES.filter(p => p.section === sec.label && (!p.group || p.href === page)) : [];
+    if (tabs.length > 1) {
+      const sub = document.createElement('nav');
+      sub.className = 'subnav no-print';
+      sub.setAttribute('aria-label', sec.label);
+      sub.innerHTML = `<div class="subnav-in">${tabs.map(p =>
+        `<a href="${p.href}"${p.href === page ? ' class="active" aria-current="page"' : ''}>${p.label}</a>`).join('')}</div>`;
+      bar.after(sub);
+    }
+
     bar.querySelector('[data-signout]').addEventListener('click', () => {
       clearSession();
       location.href = 'index.html';
+    });
+    bar.querySelector('[data-cmdk]').addEventListener('click', openCmdk);
+    // Already on Orders: open its New Order form rather than reloading the page.
+    bar.querySelector('.tb-new').addEventListener('click', e => {
+      const btn = page === 'orders.html' && document.getElementById('newOrderBtn');
+      if (btn) { e.preventDefault(); btn.click(); }
     });
     // One menu open at a time: clicking anywhere else, or Escape, closes it.
     const openMenus = () => [...bar.querySelectorAll('details[open]')];
@@ -97,6 +130,7 @@
       openMenus().filter(m => !m.contains(e.target)).forEach(m => { m.open = false; });
     });
     document.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmdk(); return; }
       if (e.key !== 'Escape') return;
       openMenus().forEach(m => { m.open = false; m.querySelector('summary').focus(); });
     });
@@ -104,6 +138,74 @@
     window.addEventListener('pageshow', () => openMenus().forEach(m => { m.open = false; }));
     refreshAccount();
   }
+
+  // ---- Search (Ctrl/⌘K): jump to any page, or open an order, PO or lot by
+  // its ID. Nothing is fetched: an ID goes straight to the page that opens it.
+  let cmdk = null;
+  function openCmdk() {
+    if (document.body.classList.contains('signed-out')) return;
+    if (!cmdk) {
+      cmdk = document.createElement('dialog');
+      cmdk.className = 'cmdk';
+      cmdk.setAttribute('aria-label', 'Search');
+      cmdk.innerHTML = `
+        <div class="cmdk-in">
+          <input type="text" class="cmdk-q" placeholder="Go to a page, or type an order, PO or lot number" aria-label="Search" autocomplete="off" spellcheck="false">
+          <div class="cmdk-list" role="listbox"></div>
+          <div class="cmdk-foot"><span>↑↓ to move</span><span>Enter to open</span><span>Esc to close</span></div>
+        </div>`;
+      document.body.append(cmdk);
+      const q = cmdk.querySelector('.cmdk-q');
+      const list = cmdk.querySelector('.cmdk-list');
+      let items = [], sel = 0;
+      const draw = () => {
+        const t = q.value.trim();
+        const tl = t.toLowerCase();
+        const pages = ALL_PAGES.filter(p => p.group !== 'hidden')
+          .filter(p => !tl || p.label.toLowerCase().includes(tl) || p.section.toLowerCase().includes(tl))
+          .map(p => ({ href: p.href, title: p.label, sub: p.section === p.label ? '' : p.section, icon: p.icon }));
+        const actions = [
+          { href: 'orders.html?new=1', title: 'New order', sub: 'Orders' },
+          { href: 'purchase-orders.html', title: 'New purchase order', sub: 'Buying' },
+          { href: 'setup.html', title: 'Setup', sub: 'Account' }
+        ].filter(a => !tl || a.title.toLowerCase().includes(tl));
+        const ids = [];
+        if (t && /\d/.test(t) && !/\s/.test(t)) {
+          const isPo = /^po/i.test(t);
+          const order = { href: `orders.html?open=${encodeURIComponent(t.toUpperCase())}`, title: `Open order ${t.toUpperCase()}`, sub: 'Orders' };
+          const po = { href: `purchase-orders.html?open=${encodeURIComponent(t.toUpperCase())}`, title: `Open purchase order ${t.toUpperCase()}`, sub: 'Buying' };
+          ids.push(...(isPo ? [po, order] : [order, po]), { href: `trace.html?lot=${encodeURIComponent(t)}`, title: `Trace lot ${t}`, sub: 'Stock' });
+        }
+        items = [...ids, ...pages, ...actions];
+        sel = Math.min(sel, Math.max(0, items.length - 1));
+        list.innerHTML = items.length ? items.map((it, i) => `
+          <a href="${it.href}" class="cmdk-item${i === sel ? ' on' : ''}" role="option" aria-selected="${i === sel}" data-i="${i}">
+            ${it.icon ? ICON(it.icon) : '<span class="cmdk-dot"></span>'}<span class="cmdk-t">${esc(it.title)}</span>${it.sub ? `<span class="cmdk-s">${esc(it.sub)}</span>` : ''}
+          </a>`).join('') : '<p class="cmdk-empty">Nothing matches.</p>';
+      };
+      q.addEventListener('input', () => { sel = 0; draw(); });
+      q.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % Math.max(1, items.length);
+          draw();
+          list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && items[sel]) {
+          e.preventDefault();
+          list.querySelector('.on')?.click();
+        }
+      });
+      list.addEventListener('click', () => cmdk.close());
+      cmdk.addEventListener('click', e => { if (e.target === cmdk) cmdk.close(); });
+      cmdk._draw = draw;
+    }
+    const q = cmdk.querySelector('.cmdk-q');
+    q.value = '';
+    cmdk._draw();
+    if (!cmdk.open) cmdk.showModal();
+    q.focus();
+  }
+  window.openSearch = openCmdk;
 
   function refreshAccount() {
     const bar = document.getElementById('topbar');

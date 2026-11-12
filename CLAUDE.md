@@ -23,7 +23,12 @@ models, sheet schemas, or conventions between the two.
   markup isn't present).
 - **App chrome lives in `js/shell.js`**, included on every page: it builds
   the top bar nav (pages only carry an empty `<header id="topbar">`; add a
-  new page to its `NAV` list, under one of the dropdown groups), the account menu (Setup and Sign out live
+  new page to its `NAV` list, under one of its five sections — Today, Orders,
+  Stock, Buying, Reports; a section's pages show as tabs under the bar, and
+  pages marked `'warehouse'` (cutting, weighing, picking, packing, day sheet)
+  only get a tab while open, being reached from the Orders pipeline and
+  Today instead), the Ctrl/⌘K search (pages, plus open an order/PO/lot by
+  ID), + New order (`orders.html?new=1`), the account menu (Setup and Sign out live
   there), toasts (`showToast`), and all loading feedback — page loader,
   top-bar progress bar, and a spinner on the clicked button — driven by the
   `google-request` events that `googleFetch` fires. It also opens orders
@@ -218,7 +223,10 @@ existing column and misaligns every row's data under the new header.
 
 ## Pages
 ```
-index.html          Dashboard: config, sign-in, nav
+index.html          Today: sign-in, then the next delivery run step by step
+                    (allocate, pick, weigh, pack, dispatch, invoice), the run
+                    after it, goods in, an alerts strip; big warehouse buttons
+                    on a phone
 setup.html            Auto-creates required tabs + headers — run first on a new sheet
 products.html           Products (one card each, SKUs by channel inside) / SKUs views
 suppliers.html            Supplier list
@@ -228,7 +236,9 @@ purchase-orders.html           Place/receive supplier orders
 stock.html                       Stock view
 stock-take.html                    Physical count vs. system quantity
 receiving.html                       Check a delivery in, line by line (phone-first)
-orders.html                          Place orders, allocate stock
+orders.html                          Pipeline board (a column per status, one delivery
+                                     day, each stage's lists as buttons) / All orders;
+                                     place orders, allocate stock (?day=, ?new=1)
 day-sheet.html                       One delivery day on A4: 3 x 4 grid of customer
                                      cards (12 a page), each listing what they ordered
 cutting-list.html                    Week's cut-to-order portions, wheel by wheel
