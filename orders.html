@@ -798,13 +798,18 @@
     return out;
   }
 
+  // N smallest pieces as the cuts they become, largest first, "wheel"
+  // dropped from fractions to keep it short: 2 × 1/16 → "1/8", 3 → "1/8 + 1/16",
+  // 16 → "Whole". `familyKg` is their nominal weight.
+  function familyCutLabel(fam, units) {
+    const short = l => /\d\s*\/\s*\d/.test(l) ? l.replace(/\s*wheel$/i, '') : l;
+    return decompose(fam, units).map(x => `${x.count > 1 ? x.count + ' × ' : ''}${short(x.portion.label)}`).join(' + ');
+  }
+  const familyKg = (fam, units) => roundQty(decompose(fam, units).reduce((s, x) => s + x.count * x.portion.kg, 0));
   function familyHint(fam, units) {
     if (!units) return '';
-    const parts = decompose(fam, units);
-    const kg = parts.reduce((s, x) => s + x.count * x.portion.kg, 0);
-    // "wheel" dropped from fractions to keep it to one line: "Cut: 2 × 1/4 + 1/16 · ≈ 20.3kg".
-    const short = l => /\d\s*\/\s*\d/.test(l) ? l.replace(/\s*wheel$/i, '') : l;
-    return `Cut: ${parts.map(x => `${x.count > 1 ? x.count + ' × ' : ''}${short(x.portion.label)}`).join(' + ')}${kg ? ` · ≈ ${roundQty(kg)}kg` : ''}`;
+    const kg = familyKg(fam, units);
+    return `Cut: ${familyCutLabel(fam, units)}${kg ? ` · ≈ ${kg}kg` : ''}`;
   }
 
 
@@ -869,7 +874,7 @@
 
   const shortDay = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
   const draftBadge = l => {
-    if (l.family) return `${l.units} ×`;
+    if (l.family) { const fam = familyByCode(l.code); return fam ? familyCutLabel(fam, l.units) : `${l.units} ×`; }
     const meta = productOrderMeta(productOf(l.code) || {});
     return meta.fixed ? `${roundQty(l.qty / meta.step)} × ${fmtQty(meta.step, 'kg')}` : qtyUnit(roundQty(l.qty), l.unit);
   };
@@ -966,19 +971,17 @@
     if (!p) return '';
     const meta = productOrderMeta(p);
     const count = fam ? l.units : roundQty(l.qty / meta.step);
-    const qty = fam ? `${l.units} × ${fam.small.label}`
+    const qty = fam ? familyCutLabel(fam, l.units)
       : meta.isCase ? `${count} case${count === 1 ? '' : 's'}` : meta.fixed ? `${count} × ${fmtQty(meta.step, 'kg')}` : qtyUnit(l.qty, l.unit);
-    const total = !fam && (meta.isCase || meta.fixed) ? qtyUnit(l.qty, l.unit) : '';
+    const total = fam ? (familyKg(fam, l.units) ? `≈ ${familyKg(fam, l.units)}kg` : '') : (meta.isCase || meta.fixed) ? qtyUnit(l.qty, l.unit) : '';
     const unit = fam ? 'kg' : l.unit;
     const piece = fam ? 0 : meta.piece;
-    const hint = fam ? `<span class="dr-sub">${escapeHtml(familyHint(fam, l.units))}</span>` : '';
     const atMin = fam ? l.units <= 1 : l.qty <= meta.step + 0.0001;
     return `<div class="draft-item">
       <button type="button" class="draft-row" data-pick-open="${escapeHtml(l.code)}" title="Change quantity or where the stock comes from">
         ${productThumb(p, 'xs')}
         <span class="dr-t">
           <span class="dr-name">${escapeHtml(l.name)}</span>
-          ${hint}
           <span class="dr-src">${sourceChipsHtml(l.picks || [], draftShort(l), unit, piece)}</span>
         </span>
       </button>
