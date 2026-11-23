@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -59,9 +59,10 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/product-ui.js?v=5"></script>
+<script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script>
@@ -145,7 +146,8 @@
       const [productRows, deliveryRows, allocationRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
-        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token)
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
+        loadLotHolds(cfg.spreadsheetId)
       ]);
 
       products = toObjects(productRows);
@@ -216,10 +218,12 @@
   function renderStats(summary, batchList) {
     const expiringSoon = batchList.filter(b => b.remaining > 0.0001 && daysUntil(b.bbe) !== null && daysUntil(b.bbe) <= 3).length;
     const inStockBatches = batchList.filter(b => b.remaining > 0.0001).length;
+    const heldCount = batchList.filter(b => b.remaining > 0.0001 && lotHold(b.code, b.batch)).length;
     document.getElementById('statsRow').innerHTML = `
       <div class="stat"><div class="n">${summary.length}</div><div class="l">Products in stock</div></div>
       <div class="stat"><div class="n">${inStockBatches}</div><div class="l">Batches in stock</div></div>
       <div class="stat"><div class="n" style="${expiringSoon ? 'color:var(--crit)' : ''}">${expiringSoon}</div><div class="l">Batches ≤3 days to BBE</div></div>
+      ${heldCount ? `<a class="stat" href="recall.html" style="text-decoration:none;"><div class="n" style="color:var(--crit)">${heldCount}</div><div class="l">Lots on hold</div></a>` : ''}
     `;
   }
 
@@ -254,7 +258,7 @@
       const rowStyle = b.remaining <= 0.0001 ? 'opacity:0.5;' : '';
       return `<tr style="${rowStyle}">
         <td>${productCell(prod, `<strong>${escapeHtml(b.code)}</strong><br><span class="muted" style="font-size:12px;">${escapeHtml(name)}</span>`)}</td>
-        <td class="code"><a href="trace.html?lot=${encodeURIComponent(b.batch)}&code=${encodeURIComponent(b.code)}" title="Trace this lot">${escapeHtml(b.batch)}</a></td>
+        <td class="code"><a href="trace.html?lot=${encodeURIComponent(b.batch)}&code=${encodeURIComponent(b.code)}" title="Trace this lot">${escapeHtml(b.batch)}</a> ${b.remaining > 0.0001 ? lotHoldTag(lotHold(b.code, b.batch)) : ''}</td>
         <td>${escapeHtml(b.supplier)}</td>
         <td>${escapeHtml(b.received)}</td>
         <td>${bbeTag(b.bbe)}</td>

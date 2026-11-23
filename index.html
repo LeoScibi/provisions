@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -59,11 +59,12 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
-<script src="js/lists-data.js?v=2"></script>
+<script src="js/lot-holds.js?v=1"></script>
+<script src="js/lists-data.js?v=3"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
   let tokenClient = null;
@@ -281,7 +282,7 @@
     const lots = {};
     data.deliveries.forEach(d => {
       const k = `${d['PRODUCT CODE']} ${d['BATCH/LOT NUMBER']}`;
-      if (!lots[k]) lots[k] = { code: d['PRODUCT CODE'], bbe: d['BEST BEFORE DATE'], left: 0 };
+      if (!lots[k]) lots[k] = { code: d['PRODUCT CODE'], lot: d['BATCH/LOT NUMBER'], bbe: d['BEST BEFORE DATE'], left: 0 };
       lots[k].left += parseFloat(d['QTY RECEIVED']) || 0;
       if (d['BEST BEFORE DATE'] && (!lots[k].bbe || d['BEST BEFORE DATE'] < lots[k].bbe)) lots[k].bbe = d['BEST BEFORE DATE'];
     });
@@ -290,9 +291,11 @@
       if (lots[k] && !a['PO LINE ID']) lots[k].left -= parseFloat(a['QTY ALLOCATED']) || 0;
     });
     const inStock = Object.values(lots).filter(l => l.left > 0.0001);
+    const held = inStock.filter(l => lotHold(l.code, l.lot)).length;
     const onHand = {};
     inStock.forEach(l => { onHand[l.code] = (onHand[l.code] || 0) + l.left; });
     return {
+      held,
       shortDated: inStock.filter(l => l.bbe && daysUntil(l.bbe) <= ALERT_SHORT_DAYS).length,
       low: data.products.filter(p => {
         const t = parseFloat(p['Reorder threshold']);
@@ -301,9 +304,11 @@
     };
   }
 
-  function renderAlerts(gi, stock, overdue, short) {
+  function renderAlerts(gi, stock, overdue, short, onHeld) {
     const chip = (n, text, href, kind) => n ? `<a class="alert-chip ${kind}" href="${href}"><i></i>${escapeHtml(text)}</a>` : '';
     const html = [
+      chip(onHeld, `${plural(onHeld, 'order')} on a lot on hold`, 'recall.html', 'crit'),
+      chip(stock.held, `${plural(stock.held, 'lot')} on hold`, 'recall.html', 'crit'),
       chip(overdue, `${plural(overdue, 'order')} from earlier days not dispatched`, 'orders.html', 'crit'),
       chip(gi.late.length, `${plural(gi.late.length, 'PO')} late`, 'purchase-orders.html', 'crit'),
       chip(short, `${plural(short, 'order')} short of stock`, 'orders.html', 'crit'),
@@ -351,7 +356,8 @@
       const undispatched = data.orders.filter(o => statusOf(o) !== 'Dispatched');
       const overdue = undispatched.filter(o => o['DELIVERY DATE'] && o['DELIVERY DATE'] < today).length;
       const short = undispatched.filter(o => packLines(o).some(l => l.short)).length;
-      renderAlerts(gi, stockAlerts(), overdue, short);
+      const onHeld = undispatched.filter(o => packLines(o).some(l => l.held)).length;
+      renderAlerts(gi, stockAlerts(), overdue, short, onHeld);
       renderRunToday(run);
       renderRunNext(second ? runOf(second) : null);
       renderGoodsIn(gi);

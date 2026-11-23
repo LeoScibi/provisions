@@ -35,19 +35,29 @@ function computeStockByProduct(deliveries, allocations) {
 // - inStock:   physically here — every delivery received, minus allocations
 //              on orders that have been Dispatched (those have left);
 // - allocated: allocated to orders not dispatched yet (still here, but spoken for);
-// - free:      inStock − allocated, i.e. what a new order can still take;
+// - held:      what's left of lots on hold (js/lot-holds.js, when loaded) —
+//              still here, but mustn't go out;
+// - free:      inStock − allocated − held, i.e. what a new order can still take;
 // - incoming:  lines on POs still "Ordered", each with its expected dates,
 //              soonest first; `qty` is what's not yet reserved for an order
 //              (`reserved` is the rest — see Allocations' PO LINE ID).
 // Takes header-keyed row objects for each tab.
 //
-// Returns { [productCode]: { inStock, allocated, free, incoming: [{ qty, unit, poId, supplier, start, end }] } }
+// Returns { [productCode]: { inStock, allocated, held, free, incoming: [{ qty, unit, poId, supplier, start, end }] } }
 function computeStockPosition({ deliveries, allocations, orders, orderLines, purchaseOrders, poLines }) {
   const out = {};
   const num = v => parseFloat(v) || 0;
-  const get = code => out[code] || (out[code] = { inStock: 0, allocated: 0, free: 0, incoming: [] });
+  const get = code => out[code] || (out[code] = { inStock: 0, allocated: 0, held: 0, free: 0, incoming: [] });
+  const holdOf = (code, lot) => typeof lotHold === 'function' ? lotHold(code, lot) : null;
+  const heldLeft = {}; // "code lot" -> what's left of a held lot
 
-  deliveries.forEach(d => { get(d['PRODUCT CODE']).inStock += num(d['QTY RECEIVED']); });
+  deliveries.forEach(d => {
+    get(d['PRODUCT CODE']).inStock += num(d['QTY RECEIVED']);
+    if (holdOf(d['PRODUCT CODE'], d['BATCH/LOT NUMBER'])) {
+      const k = `${d['PRODUCT CODE']}\u0001${d['BATCH/LOT NUMBER']}`;
+      heldLeft[k] = (heldLeft[k] || 0) + num(d['QTY RECEIVED']);
+    }
+  });
 
   const statusByOrder = {};
   orders.forEach(o => { statusByOrder[o.ID] = o.STATUS; });
@@ -58,6 +68,8 @@ function computeStockPosition({ deliveries, allocations, orders, orderLines, pur
     const qty = num(a['QTY ALLOCATED']);
     // A reservation on stock still arriving: not on the shelf yet.
     if (a['PO LINE ID']) { reservedByPoLine[a['PO LINE ID']] = (reservedByPoLine[a['PO LINE ID']] || 0) + qty; return; }
+    const k = `${a['PRODUCT CODE']}\u0001${a['BATCH/LOT NUMBER']}`;
+    if (k in heldLeft) heldLeft[k] -= qty;
     const p = get(a['PRODUCT CODE']);
     // Waste and manual removals (see stock.html) have gone, like a dispatched order.
     if (a['ORDER LINE ID'] === 'ADJUSTMENT' || statusByOrder[orderByLine[a['ORDER LINE ID']]] === 'Dispatched') p.inStock -= qty;
@@ -78,11 +90,14 @@ function computeStockPosition({ deliveries, allocations, orders, orderLines, pur
     });
   });
 
+  Object.entries(heldLeft).forEach(([k, left]) => { if (left > 0.0001) get(k.slice(0, k.indexOf('\u0001'))).held += left; });
+
   const round = n => Math.round(n * 1000) / 1000;
   Object.values(out).forEach(p => {
     p.inStock = round(p.inStock);
     p.allocated = round(p.allocated);
-    p.free = round(p.inStock - p.allocated);
+    p.held = round(p.held);
+    p.free = round(p.inStock - p.allocated - p.held);
     p.incoming.sort((a, b) => (a.start || '9999').localeCompare(b.start || '9999'));
   });
   return out;

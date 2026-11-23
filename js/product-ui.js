@@ -151,7 +151,7 @@ function stockPositionHtml(pos, unit, fromParent) {
   const shown = pos.incoming.slice(0, STOCK_INCOMING_SHOWN);
   return `
     <div class="cr-stock">
-      ${fromParent ? `<span class="muted">${escapeHtml(fromParent)}:</span> ` : ''}In stock <b>${q(pos.inStock)}</b> · Allocated <b>${q(pos.allocated)}</b> · Free <b class="${pos.free <= 0 ? 'neg' : ''}">${q(pos.free)}</b>
+      ${fromParent ? `<span class="muted">${escapeHtml(fromParent)}:</span> ` : ''}In stock <b>${q(pos.inStock)}</b> · Allocated <b>${q(pos.allocated)}</b>${pos.held > 0 ? ` · <span class="neg">On hold ${q(pos.held)}</span>` : ''} · Free <b class="${pos.free <= 0 ? 'neg' : ''}">${q(pos.free)}</b>
     </div>
     ${shown.length ? `<div class="cr-stock cr-incoming">Arriving ${shown.map(i =>
       `<b>${escapeHtml(qtyUnit(i.qty, i.unit || unit))}</b> ${escapeHtml(when(i))} <span class="muted">(${escapeHtml(i.poId)})</span>`).join(' · ')}${pos.incoming.length > shown.length ? ` · +${pos.incoming.length - shown.length} more` : ''}</div>` : ''}`;

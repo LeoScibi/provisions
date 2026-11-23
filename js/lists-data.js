@@ -21,6 +21,7 @@ function toObjects(rows) {
 async function loadListsData(spreadsheetId, token) {
   const groupsP = loadProductGroups(spreadsheetId); // in parallel with the reads below
   const cutsP = loadOptionalTab(spreadsheetId, 'Cuts');
+  const holdsP = loadLotHolds(spreadsheetId); // js/lot-holds.js — lotHold() after this
   const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
     sheetsGet(spreadsheetId, 'Orders!A:Z', token),
     sheetsGet(spreadsheetId, 'OrderLines!A:Z', token),
@@ -57,6 +58,7 @@ async function loadListsData(spreadsheetId, token) {
     allocs: toObjects(allocRows),
     productByCode, deliveryByKey, customerByName,
     cutsOfLine: cutsByLine((await cutsP).rows),
+    holds: await holdsP,
     // PO line → its PO, for lines held by a reservation on stock still arriving.
     poOfLine: (() => {
       const pos = Object.fromEntries(toObjects(poRows).map(po => [po.ID, po]));
@@ -268,7 +270,7 @@ function packLines(order) {
         return { awaiting: po.ID || 'PO', due: po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '', qty: parseFloat(a['QTY ALLOCATED']) || 0 };
       }
       const del = data.deliveryByKey[`${a['PRODUCT CODE']} ${a['BATCH/LOT NUMBER']}`];
-      return { lot: a['BATCH/LOT NUMBER'], qty: parseFloat(a['QTY ALLOCATED']) || 0, bbe: del ? del['BEST BEFORE DATE'] : '' };
+      return { lot: a['BATCH/LOT NUMBER'], qty: parseFloat(a['QTY ALLOCATED']) || 0, bbe: del ? del['BEST BEFORE DATE'] : '', hold: lotHold(a['PRODUCT CODE'], a['BATCH/LOT NUMBER']) };
     }).reduce((out, x) => {
       const same = out.find(y => (y.lot || '') === (x.lot || '') && (y.awaiting || '') === (x.awaiting || ''));
       if (same) same.qty += x.qty; else out.push(x);
@@ -284,6 +286,7 @@ function packLines(order) {
       isCut, lots,
       weighed: sumCutWeight(data.cutsOfLine[l.ID]),
       short: !isCut && allocated + 0.0001 < ordered,
+      held: lots.some(x => x.hold),
       // Set when the line was swapped for another product (orders.html → Replace).
       replaces: l.REPLACES ? (data.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES) : ''
     };
@@ -295,10 +298,15 @@ function shortLineCount(orders) {
   return orders.reduce((n, o) => n + packLines(o).filter(l => l.short).length, 0);
 }
 
-// The shared notes above a list: undated orders, and lines short of stock.
+// The shared notes above a list: lines on a lot that's on hold (a recall —
+// they mustn't go out), undated orders, and lines short of stock.
 function listNotesHtml(inWeek, undated) {
   const shortCount = shortLineCount(inWeek);
-  return (undated.length ? `
+  const held = inWeek.flatMap(o => packLines(o).filter(l => l.held).map(l => ({ o, l })));
+  return (held.length ? `
+      <div class="note" style="background:var(--crit-bg); border-color:var(--crit); color:var(--crit);">
+        <strong>${held.length} line(s) are allocated from a lot on hold — don’t send them.</strong> Swap the lot on each order first: ${[...new Set(held.map(x => x.o.ID))].map(id => { const o = held.find(x => x.o.ID === id).o; return `${orderLink(id)} (${escapeHtml(o.CUSTOMER)})`; }).join(', ')}. <a href="recall.html" style="color:inherit; text-decoration:underline;" class="no-print">Recalls</a>
+      </div>` : '') + (undated.length ? `
       <div class="note no-print">
         <strong>${undated.length} open order(s) have no delivery date</strong> and won't show on any week: ${undated.map(o => `${orderLink(o.ID)} (${escapeHtml(o.CUSTOMER)})`).join(', ')}.
       </div>` : '') + (shortCount ? `

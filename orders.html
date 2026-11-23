@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -62,11 +62,12 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/stock-calc.js?v=4"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/stock-calc.js?v=5"></script>
+<script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
+<script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script>
@@ -190,6 +191,7 @@
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
       const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
+      const holdsP = loadLotHolds(cfg.spreadsheetId); // lots on hold never go into the pool
       const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
         sheetsGet(cfg.spreadsheetId, 'Customers!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
@@ -213,6 +215,7 @@
       orderHeaders = orderRows[0] || [];
       allocationsData = toRowObjects(allocRows);
       cutsData = (await cutsP).rows;
+      await holdsP;
       deliveriesData = toRowObjects(deliveryRows);
       renderTable();
       setStatus(`Loaded ${ordersData.length} order(s).`, 'ok');
@@ -320,10 +323,11 @@
 
   function cardFlags(o, productByCode) {
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === o.ID).map(l => l.obj);
-    let toWeigh = 0, short = 0;
+    let toWeigh = 0, short = 0, held = 0;
     const awaiting = new Set();
     lines.forEach(l => {
       const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID).map(a => a.obj);
+      if (allocs.some(a => !a['PO LINE ID'] && lotHold(a['PRODUCT CODE'], a['BATCH/LOT NUMBER']))) held++;
       allocs.filter(a => a['PO LINE ID']).forEach(a => {
         const pl = poLines.find(x => x.ID === a['PO LINE ID']);
         awaiting.add(pl ? pl['PO ID'] : 'PO');
@@ -335,7 +339,7 @@
         short++;
       }
     });
-    return { lines: lines.length, toWeigh, short, awaiting: [...awaiting] };
+    return { lines: lines.length, toWeigh, short, held, awaiting: [...awaiting] };
   }
 
   function renderBoard() {
@@ -366,6 +370,7 @@
             <button type="button" class="ocard" data-id="${escapeHtml(o.ID)}">
               <span class="ocard-top"><span class="ocard-c">${escapeHtml(o.CUSTOMER)}</span><span class="code">${escapeHtml(o.ID)}</span></span>
               <span class="ocard-m">${escapeHtml(meta)}</span>
+              ${f.held && statusOf(o) !== 'Dispatched' ? `<span class="tag t-crit">Lot on hold</span>` : ''}
               ${f.short ? `<span class="tag t-warn">${plural(f.short, 'line')} short</span>` : ''}
               ${f.awaiting.map(id => `<span class="tag t-yell">Awaiting ${escapeHtml(id)}</span>`).join('')}
             </button>`;
@@ -558,6 +563,8 @@
       if (dy && !dy.disabled) { const d = parseInt(dy.dataset.day, 10); deliveryPick.day = d === usualDeliveryDay() ? null : d; renderDeliveryPicker(); return; }
       const rmDraft = e.target.closest('[data-remove-draft]');
       if (rmDraft) { draftLines = draftLines.filter(l => l.code !== rmDraft.dataset.removeDraft); renderOrderSummary(); return; }
+      const bump = e.target.closest('[data-bump]');
+      if (bump) { bumpDraft(bump.dataset.bump, parseInt(bump.dataset.by, 10)); return; }
       const pick = e.target.closest('[data-pick-open]');
       if (pick) openLotPicker(pick.dataset.pickOpen);
     };
@@ -592,7 +599,9 @@
       d.picks.push(...picksOf(l.ID));
       d.lineIds.push(l.ID);
     });
-    out.forEach(d => { d.sig = draftSig(d); });
+    // Its lots are kept as they are when the quantity changes ('order':
+    // treated like hand-picked lots, without opening the lot tables).
+    out.forEach(d => { d.sig = draftSig(d); d.custom = 'order'; });
     return out;
   }
 
@@ -859,13 +868,48 @@
   // ---- New Order: compact search cards (right) and the order list (left) ----
 
   const shortDay = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
-  const draftBadge = l => l.family ? `${l.units} ×` : qtyUnit(roundQty(l.qty), l.unit);
+  const draftBadge = l => {
+    if (l.family) return `${l.units} ×`;
+    const meta = productOrderMeta(productOf(l.code) || {});
+    return meta.fixed ? `${roundQty(l.qty / meta.step)} × ${fmtQty(meta.step, 'kg')}` : qtyUnit(roundQty(l.qty), l.unit);
+  };
 
-  function compactStockHtml(pos, unit) {
+  // Green = on the shelf now, blue = still on a purchase order: the same
+  // colours as the lot pop-up and the order list, so the two never blur.
+  function compactStockHtml(pos, unit, piece = 0) {
     pos = pos || { free: 0, incoming: [] };
     const next = pos.incoming[0];
-    return `<span class="${pos.free > 0 ? '' : 'neg'}">${pos.free > 0 ? escapeHtml(qtyUnit(roundQty(pos.free), unit)) + ' free' : 'none free'}</span>`
-      + (next ? ` · +${escapeHtml(qtyUnit(roundQty(next.qty), next.unit || unit))} ${escapeHtml(shortDay(next.start))}` : '');
+    return `<span class="${pos.free > 0 ? 'av-in' : 'neg'}">${pos.free > 0 ? escapeHtml(fmtAmount(pos.free, unit, piece, true)) + ' in stock' : 'none in stock'}</span>`
+      + (next ? ` · <span class="av-po">${escapeHtml(fmtAmount(next.qty, next.unit || unit, piece, true))} due ${escapeHtml(shortDay(next.start))}</span>` : '');
+  }
+
+  // A quantity in stock units, as pieces for a fixed-weight product:
+  // "2 × 2.5kg" (or just "2 pcs" where space is tight).
+  function fmtAmount(qty, unit, piece = 0, brief = false) {
+    if (!piece) return fmtQty(qty, unit);
+    const n = Math.floor(roundQty(qty / piece) + 1e-6);
+    return brief ? `${n} pc${n === 1 ? '' : 's'}` : `${n} × ${fmtQty(piece, 'kg')}`;
+  }
+
+  // One step more or less of a line on the order (a piece, a case, a kilo),
+  // straight from the order list or the search card's +, without the lot
+  // pop-up. Lots follow automatically unless they were chosen by hand.
+  function bumpDraft(code, by) {
+    const fam = code.startsWith(FAMILY_PREFIX) ? familyByCode(code) : null;
+    const p = fam ? null : productOf(code);
+    if (!fam && !p) return;
+    const meta = fam ? null : productOrderMeta(p);
+    let line = draftLines.find(l => l.code === code);
+    if (!line) {
+      if (by <= 0) return;
+      line = fam ? { code, name: fam.name, units: 0, family: true } : { code, name: p['Product name'], qty: 0, unit: meta.unit };
+      draftLines.push(line);
+    }
+    if (fam) line.units = Math.max(1, line.units + by);
+    else line.qty = roundQty(Math.max(meta.step, line.qty + by * meta.step));
+    const date = form.querySelector('#ord_deliveryDate').value;
+    line.picks = planPicks(line, date, line.custom ? line.picks : []);
+    renderOrderSummary();
   }
 
   function pickCardHtml(it) {
@@ -875,8 +919,8 @@
     const meta = productOrderMeta(p);
     const line = draftLines.find(l => l.code === code);
     const pack = fam ? `Cut · ${fam.small.label}${fam.small.kg ? ` ${fam.small.kg}kg` : ''}`
-      : meta.isCase ? `${meta.perCase} per case` : meta.unit === 'kg' ? 'per kg' : 'each';
-    const stock = fam ? (fam.root ? compactStockHtml(stockPos[fam.rootCode], productOrderMeta(fam.root).unit) : '') : compactStockHtml(stockPos[code], meta.unit);
+      : meta.isCase ? `${meta.perCase} per case` : meta.fixed ? `${fmtQty(meta.step, 'kg')} each` : meta.unit === 'kg' ? 'per kg' : 'each';
+    const stock = fam ? (fam.root ? compactStockHtml(stockPos[fam.rootCode], productOrderMeta(fam.root).unit) : '') : compactStockHtml(stockPos[code], meta.unit, meta.piece);
     return `
       <div class="pick-card${line ? ' in' : ''}" data-pick-code="${escapeHtml(code)}" data-pick-open="${escapeHtml(code)}">
         ${productThumb(p, 'xs')}
@@ -885,7 +929,7 @@
           <div class="pk-sub">${escapeHtml(pack)}${stock ? ' · ' + stock : ''}</div>
         </div>
         <span class="pick-badge">${line ? escapeHtml(draftBadge(line)) : ''}</span>
-        <button type="button" class="stepper-btn" aria-label="Choose quantity and lots for ${escapeHtml(it.name)}">+</button>
+        <button type="button" class="stepper-btn" data-bump="${escapeHtml(code)}" data-by="1" title="Add ${escapeHtml(fam ? fam.small.label : meta.isCase ? 'a case' : meta.fixed ? 'one ' + fmtQty(meta.step, 'kg') : meta.unit === 'kg' ? '1kg' : 'one')}" aria-label="Add one more ${escapeHtml(it.name)}">+</button>
       </div>`;
   }
 
@@ -893,7 +937,27 @@
     const mount = form.querySelector('#ord_draftList');
     if (!mount) return;
     mount.innerHTML = draftLines.length ? draftLines.map(draftRowHtml).join('')
-      : `<div class="no-empty">Search on the right and click a product to choose its quantity and lots. It then appears here.</div>`;
+      : `<div class="no-empty">Search on the right and press + to add a product, or click it to choose the quantity. Stock is taken earliest best-before first; click a line to see or change where it comes from.</div>`;
+  }
+
+  // Where a line's stock comes from, one chip per source: In stock (a lot
+  // on the shelf), Arriving (reserved on a PO, lot known at goods-in), Short.
+  function sourceChipsHtml(picks, short, unit, piece = 0) {
+    const several = picks.length + (short > 0.0001 ? 1 : 0) > 1;
+    const amt = q => several ? ` · ${escapeHtml(fmtAmount(q, unit, piece))}` : '';
+    const chips = picks.map(x => {
+      if (x.poLineId) {
+        const i = poLineInfo(x.poLineId);
+        return `<span class="src-item"><span class="src src-po">Arriving</span>${escapeHtml(i.poId)}${i.due ? ' · due ' + escapeHtml(shortDay(i.due)) : ''}${amt(x.qty)}</span>`;
+      }
+      // Days of life left on the delivery day, as in the lot pop-up.
+      const date = form.querySelector('#ord_deliveryDate')?.value;
+      const bbe = deliveryBbeFor(x.code, x.batch);
+      const d = bbe ? daysUntil(bbe) - (date ? daysUntil(date) : 0) : null;
+      return `<span class="src-item"><span class="src src-shelf">In stock</span>lot ${escapeHtml(x.batch)}${d !== null ? ` · ${d < 0 ? '<span class="neg">past best-before</span>' : `${d}d left at delivery`}` : ''}${amt(x.qty)}</span>`;
+    });
+    if (short > 0.0001) chips.push(`<span class="src-item"><span class="src src-short">Short</span>${escapeHtml(fmtAmount(short, unit, piece))} not covered</span>`);
+    return chips.join('');
   }
 
   function draftRowHtml(l) {
@@ -901,26 +965,28 @@
     const p = fam ? (fam.root || fam.small.p) : productOf(l.code);
     if (!p) return '';
     const meta = productOrderMeta(p);
+    const count = fam ? l.units : roundQty(l.qty / meta.step);
     const qty = fam ? `${l.units} × ${fam.small.label}`
-      : meta.isCase ? `${roundQty(l.qty / meta.step)} case${roundQty(l.qty / meta.step) === 1 ? '' : 's'} · ${qtyUnit(l.qty, l.unit)}` : qtyUnit(l.qty, l.unit);
+      : meta.isCase ? `${count} case${count === 1 ? '' : 's'}` : meta.fixed ? `${count} × ${fmtQty(meta.step, 'kg')}` : qtyUnit(l.qty, l.unit);
+    const total = !fam && (meta.isCase || meta.fixed) ? qtyUnit(l.qty, l.unit) : '';
     const unit = fam ? 'kg' : l.unit;
-    const parts = (l.picks || []).map(x => {
-      if (x.poLineId) { const i = poLineInfo(x.poLineId); return `${fmtQty(x.qty, unit)} on ${i.poId}${i.due ? ' due ' + shortDay(i.due) : ''}`; }
-      const d = daysUntil(deliveryBbeFor(x.code, x.batch));
-      return `${fmtQty(x.qty, unit)} lot ${x.batch}${d !== null ? ` (${d}d left)` : ''}`;
-    });
-    const short = draftShort(l);
+    const piece = fam ? 0 : meta.piece;
     const hint = fam ? `<span class="dr-sub">${escapeHtml(familyHint(fam, l.units))}</span>` : '';
+    const atMin = fam ? l.units <= 1 : l.qty <= meta.step + 0.0001;
     return `<div class="draft-item">
-      <button type="button" class="draft-row" data-pick-open="${escapeHtml(l.code)}" title="Change quantity or lots">
+      <button type="button" class="draft-row" data-pick-open="${escapeHtml(l.code)}" title="Change quantity or where the stock comes from">
         ${productThumb(p, 'xs')}
         <span class="dr-t">
           <span class="dr-name">${escapeHtml(l.name)}</span>
           ${hint}
-          <span class="dr-sub">${escapeHtml(parts.join(' · '))}${short > 0.0001 ? `${parts.length ? ' · ' : ''}<span class="neg">${escapeHtml(fmtQty(short, unit))} short</span>` : ''}</span>
+          <span class="dr-src">${sourceChipsHtml(l.picks || [], draftShort(l), unit, piece)}</span>
         </span>
-        <span class="dr-qty">${escapeHtml(qty)}</span>
       </button>
+      <span class="dr-step">
+        <button type="button" class="stepper-btn" data-bump="${escapeHtml(l.code)}" data-by="-1"${atMin ? ' disabled' : ''} aria-label="One less">−</button>
+        <span class="dr-qty">${escapeHtml(qty)}${total ? `<span class="dr-total">${escapeHtml(total)}</span>` : ''}</span>
+        <button type="button" class="stepper-btn" data-bump="${escapeHtml(l.code)}" data-by="1" aria-label="One more">+</button>
+      </span>
       <button type="button" class="draft-remove" data-remove-draft="${escapeHtml(l.code)}" title="Remove from order" aria-label="Remove ${escapeHtml(l.name)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>`;
   }
@@ -980,6 +1046,73 @@
   }
   const arrivesLabel = due => { const d = daysUntil(due); return d === null ? '—' : d < 0 ? `${-d}d overdue` : d === 0 ? 'today' : `in ${d} day${d === 1 ? '' : 's'}`; };
 
+  // ---- the two lot tables, shared by the New Order pop-up and Allocate ----
+  //
+  // What's on the shelf now (green: a real lot with a best-before) and what's
+  // still on a purchase order (blue: reserved now, its lot only known at
+  // goods-in) are separate, colour-coded sections. `piece` (kg) is set for a
+  // fixed-weight product: both tables then count and take whole pieces, and
+  // the inputs are in pieces. `values` prefill the inputs, in stock units,
+  // keyed by batch or `po|<PO line ID>`.
+  function lotTablesHtml({ lots, arrivals, unit, piece = 0, date, values = {} }) {
+    const pcs = q => Math.floor(roundQty(q / piece) + 1e-6);
+    const maxOf = q => piece ? pcs(q) : q;
+    const shown = q => q ? (piece ? roundQty(q / piece) : q) : '';
+    const takeHead = piece ? 'Take (pcs)' : 'Take';
+    const inTime = x => !date || x.due < date;
+    return `
+      <div class="lot-sec shelf">
+        <div class="lot-sec-h"><span class="src src-shelf">In stock</span>On the shelf now · earliest best-before first</div>
+        ${lots.length ? `
+          <table class="form"><thead><tr><th>Lot</th><th>Best before</th><th>Days left</th><th class="num">Free</th><th class="num">${takeHead}</th></tr></thead>
+          <tbody>${lots.map(b => `<tr>
+            <td class="code">${escapeHtml(b.batch)}</td>
+            <td>${escapeHtml(fmtDateShort(b.bbe)) || '—'}</td>
+            <td>${daysLeftHtml(b.bbe, date)}</td>
+            <td class="num">${escapeHtml(fmtAmount(b.remaining, b.unit || unit, piece))}</td>
+            <td class="num">${piece && !pcs(b.remaining) ? '<span class="muted" title="Less than one whole piece left">—</span>' : `<input type="number" step="${piece ? 1 : 'any'}" min="0" max="${maxOf(b.remaining)}" data-take="${escapeHtml(b.batch)}" value="${shown(values[b.batch])}" placeholder="0" class="take-input">`}</td>
+          </tr>`).join('')}</tbody></table>`
+          : `<div class="lot-none">Nothing free on the shelf.</div>`}
+      </div>
+      <div class="lot-sec po">
+        <div class="lot-sec-h"><span class="src src-po">Arriving</span>On purchase orders · not here yet, lot known at goods-in</div>
+        ${arrivals.length ? `
+          <table class="form"><thead><tr><th>Purchase order</th><th>Due</th><th class="num">Not yet promised</th><th class="num">${piece ? 'Reserve (pcs)' : 'Reserve'}</th></tr></thead>
+          <tbody>${arrivals.map(x => `<tr${inTime(x) ? '' : ' class="none"'}>
+            <td class="code">${escapeHtml(x.poId)}</td>
+            <td>${escapeHtml(fmtDateShort(x.due))} <span class="lot-sub">${escapeHtml(arrivesLabel(x.due))}</span>${inTime(x) ? '' : '<div class="lot-sub">too late for this delivery</div>'}</td>
+            <td class="num">${escapeHtml(fmtAmount(x.remaining, unit, piece))}</td>
+            <td class="num">${inTime(x) && maxOf(x.remaining) ? `<input type="number" step="${piece ? 1 : 'any'}" min="0" max="${maxOf(x.remaining)}" data-take-po="${escapeHtml(x.poLineId)}" value="${shown(values['po|' + x.poLineId])}" placeholder="0" class="take-input">` : ''}</td>
+          </tr>`).join('')}</tbody></table>`
+          : `<div class="lot-none">Nothing on order.</div>`}
+      </div>`;
+  }
+
+  // The take inputs of lotTablesHtml, back in stock units. `whole` is false
+  // for a fixed-weight product given part of a piece.
+  function readTakes(root, code, piece = 0) {
+    return [...root.querySelectorAll('[data-take], [data-take-po]')].map(i => {
+      const n = parseFloat(i.value) || 0;
+      return {
+        code, batch: i.dataset.take, poLineId: i.dataset.takePo,
+        qty: roundQty(piece ? n * piece : n), max: roundQty(piece ? parseFloat(i.max) * piece : parseFloat(i.max)),
+        whole: !piece || Number.isInteger(n)
+      };
+    }).filter(x => x.qty > 0);
+  }
+  function fillTakes(root, picks, piece = 0) {
+    root.querySelectorAll('[data-take], [data-take-po]').forEach(i => {
+      const x = picks.find(pk => i.dataset.take !== undefined ? !pk.poLineId && pk.batch === i.dataset.take : pk.poLineId === i.dataset.takePo);
+      i.value = x ? (piece ? roundQty(x.qty / piece) : x.qty) : '';
+    });
+  }
+
+  // Clicking a product (or its line on the order) opens this. Most of the
+  // time only the quantity matters: the pop-up says, in words, how much is
+  // on the shelf, how much is arriving in time, and where this line's stock
+  // will come from — earliest best-before first. Picking lots by hand is
+  // there, folded away under "Choose lots yourself"; once used, the line
+  // keeps those lots (`custom`) when its quantity changes.
   function openLotPicker(code) {
     const fam = code.startsWith(FAMILY_PREFIX) ? familyByCode(code) : null;
     const p = fam ? (fam.root || fam.small.p) : productOf(code);
@@ -989,55 +1122,69 @@
     const date = form.querySelector('#ord_deliveryDate').value;
     const srcCode = fam ? fam.rootCode : stockSource(code).code;
     const unit = fam ? 'kg' : meta.unit;
+    const piece = fam ? 0 : meta.piece;
+    const counted = fam || meta.isCase || meta.fixed || meta.unit !== 'kg';
     const taken = draftTaken(code);
     const lots = computeAvailableBatches(srcCode)
       .map(b => ({ ...b, remaining: roundQty(b.remaining - (taken[pickKey(srcCode, b)] || 0)) })).filter(b => b.remaining > 0.0001);
     const arrivals = incomingPool(srcCode)
       .map(x => ({ ...x, remaining: roundQty(x.remaining - (taken[pickKey(srcCode, x)] || 0)) })).filter(x => x.remaining > 0.0001);
+    const usable = lots.filter(b => !b.bbe || !date || b.bbe >= date);
+    const inTime = arrivals.filter(x => !date || x.due < date);
+    const late = arrivals.filter(x => date && x.due >= date);
+    const sum = list => roundQty(list.reduce((s, x) => s + x.remaining, 0));
     const lineFor = entered => fam
       ? { code, name: fam.name, units: Math.max(0, Math.round(entered)), family: true }
-      : { code, name: p['Product name'], qty: roundQty(meta.isCase ? entered * meta.step : entered), unit: meta.unit };
-    const shown = existing ? (fam ? existing.units : meta.isCase ? roundQty(existing.qty / meta.step) : existing.qty) : 1;
-    const suffix = fam ? `× ${fam.small.label}` : meta.isCase ? 'cases' : unitLabel(meta.unit);
-    const days = date ? new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+      : { code, name: p['Product name'], qty: roundQty(meta.isCase || meta.fixed ? entered * meta.step : entered), unit: meta.unit };
+    const shown = existing ? (fam ? existing.units : meta.isCase || meta.fixed ? roundQty(existing.qty / meta.step) : existing.qty) : 1;
+    const suffix = fam ? `× ${fam.small.label}` : meta.isCase ? `case${shown === 1 ? '' : 's'} of ${meta.perCase}` : meta.fixed ? `× ${fmtQty(meta.step, 'kg')}` : unitLabel(meta.unit);
+    const dayLong = date ? new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+    let custom = existing?.custom || false;
+
+    const tile = (cls, label, qty, sub) => `<div class="av-tile ${cls}${qty > 0.0001 ? '' : ' empty'}">
+      <div class="av-l">${label}</div>
+      <div class="av-n">${qty > 0.0001 ? escapeHtml(fmtAmount(qty, unit, piece)) : 'None'}</div>
+      ${piece && qty > 0.0001 ? `<div class="av-s">${escapeHtml(fmtQty(qty, 'kg'))}</div>` : ''}
+      ${sub ? `<div class="av-s">${sub}</div>` : ''}</div>`;
+    const pastBbe = roundQty(sum(lots) - sum(usable));
+    const shelfSub = pastBbe > 0.0001 ? `+ ${escapeHtml(fmtAmount(pastBbe, unit, piece))} past best-before by then` : 'ready to go';
+    const poSub = inTime.length ? inTime.map(x => `${escapeHtml(x.poId)} due ${escapeHtml(shortDay(x.due))}`).join(', ')
+      : late.length ? `${escapeHtml(late[0].poId)} due ${escapeHtml(shortDay(late[0].due))}: too late` : '';
+
     lotPickForm.innerHTML = `
       <div class="dlg-h">
         <div>
           <div class="ttl" style="font-size:22px;">${escapeHtml(fam ? fam.name : p['Product name'])}</div>
-          <div class="subtitle">${fam ? `Cut from ${escapeHtml(srcCode)} · ` : ''}Delivery ${escapeHtml(days)}</div>
+          <div class="subtitle">${fam ? `Cut from ${escapeHtml(srcCode)} · ` : ''}Delivery ${escapeHtml(dayLong)}</div>
         </div>
         <button type="button" class="dlg-close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="dlg-b">
         <div class="lot-qty">
           <label for="lot_qty">Quantity</label>
-          <input type="number" id="lot_qty" min="0" step="${fam || meta.isCase || meta.unit !== 'kg' ? '1' : '0.01'}" value="${shown}">
-          <span>${escapeHtml(suffix)}</span>
+          <span class="qty-step">
+            <button type="button" class="stepper-btn" data-step="-1" aria-label="One less">−</button>
+            <input type="number" id="lot_qty" min="0" step="${counted ? '1' : '0.01'}" value="${shown}" inputmode="${counted ? 'numeric' : 'decimal'}">
+            <button type="button" class="stepper-btn" data-step="1" aria-label="One more">+</button>
+          </span>
+          <span class="lot-suffix" id="lot_suffix">${escapeHtml(suffix)}</span>
           <span class="lot-sub" id="lot_hint"></span>
         </div>
-        <div class="sub-h">On the shelf · earliest best-before first</div>
-        ${lots.length ? `
-          <table class="form"><thead><tr><th>Lot</th><th>Best before</th><th>Days left</th><th class="num">Free</th><th class="num">Take</th></tr></thead>
-          <tbody>${lots.map(b => `<tr>
-            <td class="code">${escapeHtml(b.batch)}</td>
-            <td>${escapeHtml(fmtDateShort(b.bbe)) || '—'}</td>
-            <td>${daysLeftHtml(b.bbe, date)}</td>
-            <td class="num">${escapeHtml(fmtQty(b.remaining, b.unit))}</td>
-            <td class="num"><input type="number" step="any" min="0" max="${b.remaining}" data-take="${escapeHtml(b.batch)}" placeholder="0" class="take-input"></td>
-          </tr>`).join('')}</tbody></table>`
-          : `<div class="note">Nothing free on the shelf.</div>`}
-        <div class="sub-h" style="margin-top:16px;">Arriving · lot and best-before known at goods-in</div>
-        ${arrivals.length ? `
-          <table class="form"><thead><tr><th>Purchase order</th><th>Due</th><th>Arrives</th><th class="num">Unreserved</th><th class="num">Reserve</th></tr></thead>
-          <tbody>${arrivals.map(x => { const inTime = !date || x.due < date; return `<tr${inTime ? '' : ' class="none"'}>
-            <td class="code">${escapeHtml(x.poId)}</td>
-            <td>${escapeHtml(fmtDateShort(x.due))}</td>
-            <td>${escapeHtml(arrivesLabel(x.due))}${inTime ? '' : '<div class="lot-sub">too late for this delivery</div>'}</td>
-            <td class="num">${escapeHtml(fmtQty(x.remaining, unit))}</td>
-            <td class="num">${inTime ? `<input type="number" step="any" min="0" max="${x.remaining}" data-take-po="${escapeHtml(x.poLineId)}" placeholder="0" class="take-input">` : ''}</td>
-          </tr>`; }).join('')}</tbody></table>`
-          : `<div class="lot-sub">Nothing on order.</div>`}
+        <div class="av-tiles">
+          ${tile('shelf', 'In stock now', sum(usable), shelfSub)}
+          ${tile('po', `Arriving before ${escapeHtml(shortDay(date) || 'delivery')}`, sum(inTime), poSub)}
+        </div>
+        <div class="sub-h">This line will come from</div>
+        <div class="plan-list" id="lot_plan"></div>
         <div id="lotStatus" class="lot-status" aria-live="polite"></div>
+        <details class="lot-manual" id="lot_manual"${custom === true ? ' open' : ''}>
+          <summary>Choose lots yourself</summary>
+          <div class="lot-manual-b">
+            <div class="lot-manual-h"><span class="lot-sub">Only if this customer needs a particular lot or delivery.</span>
+              <button type="button" class="btn ghost sm" data-auto>Back to automatic</button></div>
+            ${lotTablesHtml({ lots, arrivals, unit, piece, date })}
+          </div>
+        </details>
       </div>
       <div class="dlg-f">
         <button type="button" class="btn ghost" data-close>Cancel</button>
@@ -1045,43 +1192,77 @@
       </div>`;
 
     const qtyInput = lotPickForm.querySelector('#lot_qty');
-    const takeInputs = () => [...lotPickForm.querySelectorAll('[data-take], [data-take-po]')];
-    const fill = picks => takeInputs().forEach(i => {
-      const x = picks.find(pk => i.dataset.take !== undefined ? pk.batch === i.dataset.take : pk.poLineId === i.dataset.takePo);
-      i.value = x ? x.qty : '';
-    });
-    const readPicks = () => takeInputs().map(i => ({ code: srcCode, batch: i.dataset.take, poLineId: i.dataset.takePo, qty: roundQty(parseFloat(i.value) || 0), max: parseFloat(i.max) })).filter(x => x.qty > 0);
+    const readPicks = () => readTakes(lotPickForm, srcCode, piece);
+    const currentLine = () => lineFor(parseFloat(qtyInput.value) || 0);
+    // The full plan: hand-picked lots first (if any), then FEFO for the rest.
+    const plan = () => planPicks(currentLine(), date, custom ? readPicks().map(({ max, whole, ...x }) => x) : []);
+    const planRowHtml = (x) => {
+      if (x.poLineId) {
+        const i = poLineInfo(x.poLineId);
+        return `<div class="plan-row"><span class="src src-po">Arriving</span><span class="plan-t">${escapeHtml(i.poId)}${i.due ? ` · due ${escapeHtml(shortDay(i.due))} (${escapeHtml(arrivesLabel(i.due))})` : ''}<span class="lot-sub">Reserved now; its lot is filled in at goods-in</span></span><span class="plan-q">${escapeHtml(fmtAmount(x.qty, unit, piece))}</span></div>`;
+      }
+      const bbe = deliveryBbeFor(srcCode, x.batch);
+      const left = bbe && date ? daysUntil(bbe) - daysUntil(date) : null;
+      return `<div class="plan-row"><span class="src src-shelf">In stock</span><span class="plan-t">Lot ${escapeHtml(x.batch)}${bbe ? ` · best before ${escapeHtml(fmtDateShort(bbe))}` : ''}${left !== null ? `<span class="${left < 0 ? 'neg' : 'lot-sub'}">${left < 0 ? 'Past its best-before by delivery' : `${left} days left at delivery`}</span>` : ''}</span><span class="plan-q">${escapeHtml(fmtAmount(x.qty, unit, piece))}</span></div>`;
+    };
     const refresh = () => {
-      const line = lineFor(parseFloat(qtyInput.value) || 0);
+      const line = currentLine();
       const need = draftNeed(line);
-      const total = roundQty(readPicks().reduce((s, x) => s + x.qty, 0));
-      const over = readPicks().find(x => x.qty > x.max + 0.0001);
       const hasQty = fam ? line.units > 0 : line.qty > 0;
+      const picks = readPicks();
       const statusEl = lotPickForm.querySelector('#lotStatus');
-      lotPickForm.querySelector('#lot_hint').textContent = fam ? familyHint(fam, line.units) : meta.isCase && hasQty ? `= ${qtyUnit(line.qty, meta.unit)}` : '';
-      const coverable = roundQty(lots.reduce((s, b) => s + b.remaining, 0) + arrivals.filter(x => !date || x.due < date).reduce((s, x) => s + x.remaining, 0));
+      lotPickForm.querySelector('#lot_hint').textContent = fam ? familyHint(fam, line.units) : (meta.isCase || meta.fixed) && hasQty ? `= ${qtyUnit(line.qty, meta.unit)}` : '';
+      if (meta.isCase) lotPickForm.querySelector('#lot_suffix').textContent = `case${(parseFloat(qtyInput.value) || 0) === 1 ? '' : 's'} of ${meta.perCase}`;
+      lotPickForm.querySelector('[data-step="-1"]').disabled = (parseFloat(qtyInput.value) || 0) <= 1;
       let msg = '', bad = false;
-      if (over) { msg = `${over.batch ? 'Lot ' + over.batch : 'That PO'} only has ${fmtQty(over.max, unit)} free.`; bad = true; }
-      else if (total > need + 0.0001) { msg = `You've taken ${fmtQty(total, unit)} but only ${fmtQty(need, unit)} is needed.`; bad = true; }
-      else if (hasQty && need > coverable + 0.0001) msg = `${fmtQty(roundQty(need - coverable), unit)} short: nothing left to cover it. You can still add it and replace it on the order later.`;
-      else if (hasQty && total < need - 0.0001) msg = `${fmtQty(roundQty(need - total), unit)} not chosen yet: it'll be taken earliest best-before first.`;
-      else if (hasQty) msg = `${fmtQty(total, unit)} chosen, all of it covered.`;
+      if (counted && !Number.isInteger(parseFloat(qtyInput.value) || 0)) {
+        msg = fam ? 'Whole pieces only.' : meta.isCase ? 'Whole cases only.' : meta.fixed ? `Whole pieces only: ${fmtQty(meta.step, 'kg')} each.` : 'Whole numbers only.'; bad = true;
+      } else if (custom) {
+        const part = picks.find(x => !x.whole);
+        const over = picks.find(x => x.qty > x.max + 0.0001);
+        const total = roundQty(picks.reduce((s, x) => s + x.qty, 0));
+        if (part) { msg = `Whole pieces only: ${fmtQty(piece, 'kg')} each.`; bad = true; }
+        else if (over) { msg = `${over.batch ? 'Lot ' + over.batch : 'That PO'} only has ${fmtAmount(over.max, unit, piece)} free.`; bad = true; }
+        else if (total > need + 0.0001) { msg = `You've chosen ${fmtAmount(total, unit, piece)} but the order is for ${fmtAmount(need, unit, piece)}.`; bad = true; }
+      }
+      const rows = hasQty && !bad ? plan() : [];
+      const short = hasQty && !bad ? roundQty(need - rows.reduce((s, x) => s + x.qty, 0)) : 0;
+      lotPickForm.querySelector('#lot_plan').innerHTML = !hasQty ? '<div class="lot-none">Enter a quantity.</div>'
+        : rows.map(planRowHtml).join('') + (short > 0.0001 ? `<div class="plan-row short"><span class="src src-short">Short</span><span class="plan-t">Nothing left on the shelf or arriving in time<span class="lot-sub">You can still add it, and replace it on the order later.</span></span><span class="plan-q">${escapeHtml(fmtAmount(short, unit, piece))}</span></div>` : '');
+      if (!msg && custom && hasQty) msg = custom === true ? 'Using the lots you chose; anything not chosen is taken earliest best-before first.' : 'Keeping the lots this order already has; anything more is taken earliest best-before first.';
       statusEl.textContent = msg;
       statusEl.classList.toggle('bad', bad);
       lotPickForm.querySelector('#lotAddBtn').disabled = bad || !hasQty;
     };
-    fill(existing ? (existing.picks || []) : planPicks(lineFor(shown), date));
+    fillTakes(lotPickForm, existing ? (existing.picks || []) : planPicks(lineFor(shown), date), piece);
     refresh();
     lotPickForm.oninput = (e) => {
-      if (e.target === qtyInput) fill(planPicks(lineFor(parseFloat(qtyInput.value) || 0), date));
+      if (e.target === qtyInput) { if (!custom) fillTakes(lotPickForm, plan(), piece); }
+      else if (e.target.matches('[data-take], [data-take-po]')) custom = true;
       refresh();
     };
-    lotPickForm.onclick = (e) => { if (e.target.closest('[data-close]')) lotPickDialog.close(); };
+    lotPickForm.onclick = (e) => {
+      if (e.target.closest('[data-close]')) { lotPickDialog.close(); return; }
+      const step = e.target.closest('[data-step]');
+      if (step) {
+        const by = parseInt(step.dataset.step, 10) * (counted ? 1 : 0.5);
+        qtyInput.value = roundQty(Math.max(counted ? 1 : 0.5, (parseFloat(qtyInput.value) || 0) + by));
+        if (!custom) fillTakes(lotPickForm, plan(), piece);
+        refresh();
+        return;
+      }
+      if (e.target.closest('[data-auto]')) {
+        custom = false;
+        fillTakes(lotPickForm, plan(), piece);
+        refresh();
+      }
+    };
     lotPickForm.onsubmit = (e) => {
       e.preventDefault();
-      const line = lineFor(parseFloat(qtyInput.value) || 0);
+      const line = currentLine();
       if (!(fam ? line.units : line.qty)) return;
-      line.picks = planPicks(line, date, readPicks().map(({ max, ...x }) => x));
+      line.picks = plan();
+      line.custom = custom;
       const at = draftLines.findIndex(l => l.code === code);
       // Keep an existing line's OrderLines IDs, signature and REPLACES.
       if (at >= 0) draftLines[at] = { ...draftLines[at], ...line }; else draftLines.push(line);
@@ -1093,23 +1274,29 @@
     qtyInput.select();
   }
 
-
-
-
-
-
-
   // Case-ordered products (Ordering unit = Case) can only be ordered in
   // whole cases — the +/- stepper moves qty by one case at a time,
   // converted into the product's own tracked unit (kg or pc).
+  // Fixed-weight products — priced per kg, sold as whole pieces of a set
+  // weight (Coppa 2.5kg: Per kg, a Nominal weight, not cut from anything,
+  // not by the case) — are ordered and allocated in whole pieces: the line
+  // stays in kilos (stock, billing and lists unchanged) but always a multiple
+  // of `piece`, and every lot or PO gives whole pieces.
   function productOrderMeta(p) {
     const unit = p['Pricing basis'] === 'Per kg' ? 'kg' : 'pc';
     const perCase = parseFloat(p['Units per case']) || 0;
     const isCase = p['Ordering unit'] === 'Case' && perCase > 0;
-    const nominalWeight = parseFloat(p['Nominal weight (kg)']) || 1;
-    const step = isCase ? (unit === 'kg' ? perCase * nominalWeight : perCase) : 1;
-    return { unit, isCase, perCase, step };
+    const nominal = parseFloat(p['Nominal weight (kg)']) || 0;
+    const fixed = !isCase && unit === 'kg' && nominal > 0 && !p['Cut from (code)'];
+    const step = isCase ? (unit === 'kg' ? perCase * (nominal || 1) : perCase) : fixed ? nominal : 1;
+    return { unit, isCase, perCase, step, fixed, piece: fixed ? nominal : 0 };
   }
+  // kg per whole piece when a line of `code` in `unit` goes by fixed-weight pieces, else 0.
+  function fixedPiece(code, unit) {
+    const p = productOf(code);
+    return p && unit === 'kg' ? productOrderMeta(p).piece : 0;
+  }
+  const isMultiple = (qty, piece) => piece > 0 && qty > 0 && Math.abs(qty / piece - Math.round(qty / piece)) < 1e-6;
 
   function roundQty(n) {
     return Math.round(n * 1000) / 1000;
@@ -1415,17 +1602,19 @@
     const short = !ready && free + incomingFree + 0.0001 < outstanding;
     const reservations = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID && a.obj['PO LINE ID']);
     const reservedNote = reservations.length ? `<div class="reserved-note">${reservations.map(a => { const i = poLineInfo(a.obj['PO LINE ID']); return `Reserved ${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, unit))} · ${escapeHtml(i.poId)}${i.due ? ' due ' + escapeHtml(fmtDateShort(i.due)) : ''}`; }).join('<br>')}</div>` : '';
-    const statusBadge = ready ? (reservations.length ? '<span class="tag t-chill" title="Partly or fully held on stock still arriving">Reserved</span>' : '<span class="tag t-ok">Ready</span>')
+    const heldAllocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === l.ID && !a.obj['PO LINE ID'] && lotHold(a.obj['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']));
+    const heldNote = heldAllocs.length ? `<div class="held-note">Lot on hold: ${[...new Set(heldAllocs.map(a => a.obj['BATCH/LOT NUMBER']))].map(escapeHtml).join(', ')} — remove it under Lots and allocate another</div>` : '';
+    const statusBadge = heldAllocs.length ? lotHoldTag(lotHold(heldAllocs[0].obj['PRODUCT CODE'], heldAllocs[0].obj['BATCH/LOT NUMBER'])) : ready ? (reservations.length ? '<span class="tag t-chill" title="Partly or fully held on stock still arriving">Reserved</span>' : '<span class="tag t-ok">Ready</span>')
       : (allocated > 0 ? '<span class="tag t-warn">Partial</span>' : '<span class="tag t-crit">Unallocated</span>');
     return `
       <tr>
-        <td>${nameCell}${reservedNote}</td>
-        <td class="num">${ordered} ${unitLabel(l.UNIT)}</td>
+        <td>${nameCell}${reservedNote}${heldNote}</td>
+        <td class="num">${isMultiple(ordered, fixedPiece(code, l.UNIT)) ? `${escapeHtml(fmtAmount(ordered, 'kg', fixedPiece(code, l.UNIT)))}<div class="incoming-note">${escapeHtml(fmtQty(ordered, 'kg'))}</div>` : `${ordered} ${unitLabel(l.UNIT)}`}</td>
         <td class="num ${short ? 'neg' : ''}" title="${short ? 'Not enough free stock, on the shelf or arriving in time, to fill this line' : (src.cut ? `Free kilos of ${src.code} not yet allocated to any order` : 'Free stock not yet allocated to any order')}">${escapeHtml(fmtQty(free, unit))}${incomingFree > 0 ? `<div class="incoming-note">+${escapeHtml(fmtQty(incomingFree, unit))} due</div>` : ''}</td>
         <td class="num">${escapeHtml(fmtQty(allocated, unit))}</td>
         <td>${statusBadge}</td>
         <td class="line-actions">
-          <button type="button" class="btn ghost sm" data-open-alloc="${escapeHtml(l.ID)}">${ready ? 'Lots' : 'Allocate'}</button>
+          <button type="button" class="btn ghost sm${heldAllocs.length ? ' attn' : ''}" data-open-alloc="${escapeHtml(l.ID)}">${ready ? 'Lots' : 'Allocate'}</button>
           ${src.cut || cuts.length ? '' : `<button type="button" class="btn ghost sm${short ? ' attn' : ''}" data-open-replace="${escapeHtml(l.ID)}">Replace</button>`}
           <button type="button" class="btn ghost sm" data-remove-line="${escapeHtml(l.ID)}">Remove</button>
         </td>
@@ -1458,6 +1647,13 @@
       const incoming = poPools[code] = poPools[code] || incomingPool(code, deliveryDate)
         .map(x => ({ ...x, remaining: roundQty(x.remaining - (taken[pickKey(code, x)] || 0)) }));
       let left = roundQty(l.inStockUnits ? l.qty : l.qty * src.perUnit);
+      // A fixed-weight piece (Coppa 2.5kg) is never split across lots or
+      // POs. Only for a need in whole pieces, so an older line that isn't
+      // (3kg of a 2.5kg piece) still fills the way it always did.
+      const fixedKg = src.unit ? 0 : fixedPiece(l.code, l.unit);
+      const fixed = isMultiple(left, fixedKg);
+      const piece = src.unit ? src.perUnit : fixed ? fixedKg : 0;
+      const wholePieces = q => fixed ? roundQty(Math.floor(roundQty(q / piece) + 1e-6) * piece) : q;
       (l.picks || []).forEach(pk => {
         const from = pk.poLineId ? incoming.find(x => x.poLineId === pk.poLineId) : allLots.find(b => b.batch === pk.batch);
         const take = from ? roundQty(Math.min(left, pk.qty, from.remaining)) : 0;
@@ -1470,16 +1666,16 @@
       // A cut piece comes off one wheel: take each whole piece from the
       // earliest-dated lot that still has enough for it, and only split a
       // piece across lots (below) when no single lot can cover it.
-      if (src.unit) {
-        while (left + 0.0001 >= src.perUnit) {
-          const b = shelf.find(x => x.remaining + 0.0001 >= src.perUnit);
+      if (piece) {
+        while (left + 0.0001 >= piece) {
+          const b = shelf.find(x => x.remaining + 0.0001 >= piece);
           if (!b) break;
-          rows.push({ lineId: l.lineId, code, batch: b.batch, qty: src.perUnit });
-          b.remaining = roundQty(b.remaining - src.perUnit);
-          left = roundQty(left - src.perUnit);
+          rows.push({ lineId: l.lineId, code, batch: b.batch, qty: piece });
+          b.remaining = roundQty(b.remaining - piece);
+          left = roundQty(left - piece);
         }
       }
-      shelf.forEach(b => {
+      if (!fixed) shelf.forEach(b => {
         if (left <= 0.0001) return;
         const take = roundQty(Math.min(left, b.remaining));
         if (take <= 0) return;
@@ -1489,7 +1685,7 @@
       });
       incoming.forEach(x => {
         if (left <= 0.0001) return;
-        const take = roundQty(Math.min(left, x.remaining));
+        const take = wholePieces(roundQty(Math.min(left, x.remaining)));
         if (take <= 0) return;
         rows.push({ lineId: l.lineId, code, poLineId: x.poLineId, qty: take });
         x.remaining = roundQty(x.remaining - take);
@@ -1524,18 +1720,6 @@
     const po = l && purchaseOrders.find(x => x.ID === l['PO ID']);
     return { poId: po?.ID || '?', due: po ? (po['EXPECTED END DATE'] || po['EXPECTED START DATE'] || '') : '' };
   };
-
-  // FEFO split of `qty` over a product's free lots: [{ batch, bbe, take }].
-  function fefoPlan(code, qty, pool) {
-    const out = [];
-    let left = qty;
-    (pool || computeAvailableBatches(code)).forEach(b => {
-      if (left <= 0.0001) return;
-      const take = roundQty(Math.min(left, b.remaining));
-      if (take > 0) { out.push({ batch: b.batch, bbe: b.bbe, take }); left = roundQty(left - take); }
-    });
-    return out;
-  }
 
   // Writes new Allocations rows. The tab is re-read first and each row trimmed
   // to what its line still needs according to the sheet, not this page's
@@ -1578,7 +1762,7 @@
 
   async function handleAllocateAll(order) {
     const lines = orderLinesData.filter(l => l.obj['ORDER ID'] === order.obj.ID);
-    const { rows } = autoAllocate(lines.map(({ obj: l }) => ({ lineId: l.ID, code: l['PRODUCT CODE'], qty: outstandingFor(l), inStockUnits: true }))
+    const { rows } = autoAllocate(lines.map(({ obj: l }) => ({ lineId: l.ID, code: l['PRODUCT CODE'], unit: l.UNIT, qty: outstandingFor(l), inStockUnits: true }))
       .filter(l => l.qty > 0.0001), order.obj['DELIVERY DATE']);
     if (!rows.length) { setDlgStatus('Nothing more can be allocated from stock in hand or on its way.', 'error'); return; }
     const cfg = await ensureAuth(setDlgStatus);
@@ -1609,52 +1793,38 @@
     const allocs = allocationsData.filter(a => a.obj['ORDER LINE ID'] === lineId);
     const weighedLots = new Set(cutsForLine(lineId).map(c => c.obj['BATCH/LOT NUMBER']));
     const outstanding = outstandingFor(l);
+    const date = order.obj['DELIVERY DATE'];
+    // Fixed-weight lines (Coppa 2.5kg) are taken in whole pieces.
+    const fixedKg = src.cut ? 0 : fixedPiece(l['PRODUCT CODE'], line.obj.UNIT);
+    const piece = isMultiple(parseFloat(l['QTY ORDERED']) || 0, fixedKg) ? fixedKg : 0;
     const lots = computeAvailableBatches(code);
-    const incoming = incomingPool(code, order.obj['DELIVERY DATE']);
-    const plan = Object.fromEntries(fefoPlan(code, outstanding, lots).map(x => [x.batch, x.take]));
-    // What the shelf can't cover is prefilled on the POs, soonest first.
-    let poLeft = roundQty(outstanding - Object.values(plan).reduce((s, v) => s + v, 0));
-    const poPlan = {};
-    incoming.forEach(x => { if (poLeft > 0.0001) { poPlan[x.poLineId] = roundQty(Math.min(poLeft, x.remaining)); poLeft = roundQty(poLeft - poPlan[x.poLineId]); } });
+    const arrivals = incomingPool(code);
+    const incoming = arrivals.filter(x => !date || x.due < date);
+    // Prefilled the way placing the order would: shelf FEFO, then POs in time.
+    const values = {};
+    autoAllocate([{ lineId: lineId, code: l['PRODUCT CODE'], unit: line.obj.UNIT, qty: outstanding, inStockUnits: true }], date).rows
+      .forEach(r => { const k = r.poLineId ? 'po|' + r.poLineId : r.batch; values[k] = roundQty((values[k] || 0) + r.qty); });
+    const amt = q => fmtAmount(q, l.UNIT, piece);
     allocForm.innerHTML = `
       <div class="dlg-h">
         <div>
           <div class="ttl" style="font-size:22px;">${escapeHtml(productName(l['PRODUCT CODE']))}</div>
-          <div class="subtitle">${src.cut ? `Cut from ${escapeHtml(productName(code))} · ` : ''}${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(src.unit ? `${parseFloat(line.obj['QTY ORDERED']) || 0} × ${fmtQty(src.perUnit, 'kg')}` : fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))} · allocated ${escapeHtml(fmtQty(allocatedFor(lineId), l.UNIT))} · still needed <strong>${escapeHtml(fmtQty(outstanding, l.UNIT))}</strong></div>
+          <div class="subtitle">${src.cut ? `Cut from ${escapeHtml(productName(code))} · ` : ''}${escapeHtml(order.obj.CUSTOMER)} · ordered ${escapeHtml(src.unit ? `${parseFloat(line.obj['QTY ORDERED']) || 0} × ${fmtQty(src.perUnit, 'kg')}` : piece ? amt(parseFloat(l['QTY ORDERED']) || 0) : fmtQty(parseFloat(l['QTY ORDERED']) || 0, l.UNIT))} · allocated ${escapeHtml(amt(allocatedFor(lineId)))} · still needed <strong>${escapeHtml(amt(outstanding))}</strong></div>
         </div>
         <button type="button" class="dlg-close" data-close aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="dlg-b">
         ${allocs.length ? `
-          <div class="sub-h">Allocated</div>
-          <table class="form" style="margin-bottom:16px;"><thead><tr><th>Lot</th><th>Best before</th><th class="num">Qty</th><th></th></tr></thead>
+          <div class="sub-h">Already allocated to this line</div>
+          <table class="form" style="margin-bottom:16px;"><thead><tr><th>From</th><th>Best before / due</th><th class="num">Qty</th><th></th></tr></thead>
           <tbody>${allocs.map(a => `<tr>
-            <td class="code">${a.obj['PO LINE ID'] ? `Reserved · ${escapeHtml(poLineInfo(a.obj['PO LINE ID']).poId)}` : escapeHtml(a.obj['BATCH/LOT NUMBER'])}</td>
+            <td class="code">${a.obj['PO LINE ID'] ? `<span class="src src-po">Arriving</span>${escapeHtml(poLineInfo(a.obj['PO LINE ID']).poId)}` : `<span class="src src-shelf">In stock</span>${escapeHtml(a.obj['BATCH/LOT NUMBER'])} ${lotHoldTag(lotHold(a.obj['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']))}`}</td>
             <td>${a.obj['PO LINE ID'] ? `<span class="muted">due ${escapeHtml(fmtDateShort(poLineInfo(a.obj['PO LINE ID']).due)) || '?'}</span>` : (escapeHtml(fmtDateShort(deliveryBbeFor(a.obj['PRODUCT CODE'], a.obj['BATCH/LOT NUMBER']))) || '—')}</td>
-            <td class="num">${escapeHtml(fmtQty(parseFloat(a.obj['QTY ALLOCATED']) || 0, l.UNIT))}</td>
+            <td class="num">${escapeHtml(amt(parseFloat(a.obj['QTY ALLOCATED']) || 0))}</td>
             <td class="line-actions">${weighedLots.has(a.obj['BATCH/LOT NUMBER']) ? '<span class="muted" title="Undo the weight on the Cutting page to change this">Weighed</span>' : `<button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button>`}</td>
           </tr>`).join('')}</tbody></table>` : ''}
-        <div class="sub-h">Free stock · earliest best-before first</div>
-        ${lots.length ? `
-          <table class="form"><thead><tr><th>Lot</th><th>Best before</th><th>Days left</th><th class="num">Free</th><th class="num">Take</th></tr></thead>
-          <tbody>${lots.map(b => `<tr>
-            <td class="code">${escapeHtml(b.batch)}</td>
-            <td>${escapeHtml(fmtDateShort(b.bbe)) || '—'}</td>
-            <td>${daysLeftHtml(b.bbe, order.obj['DELIVERY DATE'])}</td>
-            <td class="num">${escapeHtml(fmtQty(b.remaining, b.unit))}</td>
-            <td class="num"><input type="number" step="any" min="0" max="${b.remaining}" data-take="${escapeHtml(b.batch)}" value="${plan[b.batch] || ''}" placeholder="0" class="take-input"></td>
-          </tr>`).join('')}</tbody></table>`
-          : `<div class="note">No free stock of this product on the shelf.</div>`}
-        ${incoming.length ? `
-          <div class="sub-h" style="margin-top:16px;">Arriving before the delivery date · reserve now, lots filled in at goods-in</div>
-          <table class="form"><thead><tr><th>Purchase order</th><th>Due</th><th>Arrives</th><th class="num">Unreserved</th><th class="num">Reserve</th></tr></thead>
-          <tbody>${incoming.map(x => `<tr>
-            <td class="code">${escapeHtml(x.poId)}</td>
-            <td>${escapeHtml(fmtDateShort(x.due))}</td>
-            <td>${escapeHtml(arrivesLabel(x.due))}</td>
-            <td class="num">${escapeHtml(fmtQty(x.remaining, l.UNIT))}</td>
-            <td class="num"><input type="number" step="any" min="0" max="${x.remaining}" data-take-po="${escapeHtml(x.poLineId)}" value="${poPlan[x.poLineId] || ''}" placeholder="0" class="take-input"></td>
-          </tr>`).join('')}</tbody></table>` : ''}
+        ${outstanding > 0.0001 ? `<div class="sub-h">Allocate the rest · ${escapeHtml(amt(outstanding))} still needed</div>` : ''}
+        ${lotTablesHtml({ lots, arrivals, unit: l.UNIT, piece, date, values })}
         <div id="allocStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
@@ -1665,8 +1835,8 @@
     const updateTotal = () => {
       const btn = allocForm.querySelector('#allocSaveBtn');
       if (!btn) return;
-      const total = [...allocForm.querySelectorAll('[data-take], [data-take-po]')].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
-      btn.textContent = total > 0 ? `Allocate ${fmtQty(total, l.UNIT)}` : 'Allocate';
+      const total = readTakes(allocForm, code, piece).reduce((s, x) => s + x.qty, 0);
+      btn.textContent = total > 0 ? `Allocate ${amt(total)}` : 'Allocate';
       btn.disabled = total <= 0;
     };
     updateTotal();
@@ -1676,27 +1846,22 @@
       if (e.target.closest('[data-replace-instead]')) { allocDialog.close(); openReplaceDialog(order, lineId); return; }
       const rm = e.target.closest('[data-remove-alloc]');
       if (rm) { allocDialog.close(); await handleRemoveAllocation(order, rm.dataset.removeAlloc); openAllocDialog(ordersData.find(r => r.obj.ID === order.obj.ID) || order, lineId); return; }
-      if (e.target.closest('#allocSaveBtn')) saveAllocDialog(order, l, lots, incoming);
+      if (e.target.closest('#allocSaveBtn')) saveAllocDialog(order, l, lots, incoming, piece);
     };
     allocDialog.showModal();
   }
 
-  async function saveAllocDialog(order, l, lots, incoming) {
+  async function saveAllocDialog(order, l, lots, incoming, piece = 0) {
     const status = allocForm.querySelector('#allocStatus');
+    const amt = q => fmtAmount(q, l.UNIT, piece);
+    const fail = msg => { status.textContent = msg; status.style.color = 'var(--crit)'; };
     const rows = [];
-    for (const input of allocForm.querySelectorAll('[data-take]')) {
-      const qty = roundQty(parseFloat(input.value) || 0);
-      if (qty <= 0) continue;
-      const lot = lots.find(b => b.batch === input.dataset.take);
-      if (qty > lot.remaining + 0.0001) { status.textContent = `Lot ${lot.batch} only has ${fmtQty(lot.remaining, lot.unit)} free.`; status.style.color = 'var(--crit)'; return; }
-      rows.push({ lineId: l.ID, code: stockSource(l['PRODUCT CODE']).code, batch: lot.batch, qty });
-    }
-    for (const input of allocForm.querySelectorAll('[data-take-po]')) {
-      const qty = roundQty(parseFloat(input.value) || 0);
-      if (qty <= 0) continue;
-      const x = incoming.find(i => i.poLineId === input.dataset.takePo);
-      if (qty > x.remaining + 0.0001) { status.textContent = `${x.poId} only has ${fmtQty(x.remaining, l.UNIT)} unreserved.`; status.style.color = 'var(--crit)'; return; }
-      rows.push({ lineId: l.ID, code: stockSource(l['PRODUCT CODE']).code, poLineId: x.poLineId, qty });
+    for (const x of readTakes(allocForm, stockSource(l['PRODUCT CODE']).code, piece)) {
+      if (!x.whole) return fail(`Whole pieces only: ${fmtQty(piece, 'kg')} each.`);
+      const from = x.poLineId ? incoming.find(i => i.poLineId === x.poLineId) : lots.find(b => b.batch === x.batch);
+      if (!from) continue;
+      if (x.qty > from.remaining + 0.0001) return fail(x.poLineId ? `${from.poId} only has ${amt(from.remaining)} not yet promised.` : `Lot ${from.batch} only has ${amt(from.remaining)} free.`);
+      rows.push({ lineId: l.ID, code: x.code, batch: x.batch, poLineId: x.poLineId, qty: x.qty });
     }
     if (!rows.length) return;
     const cfg = await ensureAuth(setDlgStatus);
@@ -1842,8 +2007,9 @@
       const key = a['BATCH/LOT NUMBER'];
       if (batchMap[key]) batchMap[key].remaining -= parseFloat(a['QTY ALLOCATED']) || 0;
     });
+    // A lot on hold (recall, quarantine — js/lot-holds.js) isn't free to anyone.
     return Object.values(batchMap)
-      .filter(b => b.remaining > 0.0001)
+      .filter(b => b.remaining > 0.0001 && !lotHold(productCode, b.batch))
       .sort((a, b) => (a.bbe || '9999').localeCompare(b.bbe || '9999'));
   }
 

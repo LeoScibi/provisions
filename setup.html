@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -38,7 +38,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=7"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -207,6 +207,25 @@
       // Allocations that takes it off stock, removed with it on undo.
       title: 'Waste',
       headers: ['ID','DATE','PRODUCT CODE','BATCH/LOT NUMBER','QTY','UNIT','REASON','RECORDED BY','NOTES','ALLOCATION ID']
+    },
+    {
+      // A lot that mustn't be sold (recall, quarantine), keyed on product +
+      // lot like Deliveries. Active while RELEASED AT is blank: allocation
+      // and the lot pickers skip it, and lists flag orders still on it
+      // (js/lot-holds.js). RECALL ID links it to the recall that held it.
+      title: 'LotHolds',
+      headers: ['ID','PRODUCT CODE','BATCH/LOT NUMBER','REASON','RECALL ID','HELD AT','HELD BY','RELEASED AT','RELEASED BY']
+    },
+    {
+      // One recall, real or a mock drill (recall.html). LOTS is the scope,
+      // one "PRODUCT CODE|LOT" per line; OPENED/CLOSED time the drill.
+      title: 'Recalls',
+      headers: ['ID','TYPE','TITLE','REASON','LOTS','OPENED','OPENED BY','CLOSED','CLOSED BY','NOTES']
+    },
+    {
+      // Each customer told about a recall: when, by whom, what was agreed.
+      title: 'RecallContacts',
+      headers: ['ID','RECALL ID','CUSTOMER','CONTACTED AT','CONTACTED BY','NOTES']
     }
   ];
 

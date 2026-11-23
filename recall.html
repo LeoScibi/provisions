@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Recalls</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=50">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+<header class="topbar no-print" id="topbar"></header>
+<main>
+  <h2 id="pageTitle">Recalls</h2>
+  <div id="signedOutNotice" class="note no-print" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="recallCard" style="display:none;">
+    <div id="setupNote"></div>
+    <div id="recallHead"></div>
+    <div id="recallList"></div>
+    <section class="panel no-print" id="findPanel" style="margin-bottom:18px;">
+      <div class="panel-h"><h3>Find affected lots</h3><span class="muted" style="font-size:13px;">Fill in what the supplier's notice gives you — any one is enough.</span></div>
+      <form id="findForm" style="padding:16px 20px 4px;">
+        <div class="row grid3">
+          <div class="col field"><label for="f_product">Product</label><input type="search" id="f_product" list="productList" placeholder="Name or code — includes its wheel and portions" autocomplete="off"><datalist id="productList"></datalist></div>
+          <div class="col field"><label for="f_supplier">Supplier</label><select id="f_supplier"><option value="">Any supplier</option></select></div>
+          <div class="col field"><label for="f_lots">Lot numbers</label><input type="text" id="f_lots" placeholder="One or more, comma or space separated" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
+          <div class="col field"><label for="f_bbeFrom">Best before from</label><input type="date" id="f_bbeFrom"></div>
+          <div class="col field"><label for="f_bbeTo">Best before to</label><input type="date" id="f_bbeTo"></div>
+          <div class="col field"><label for="f_recFrom">Received from</label><input type="date" id="f_recFrom"></div>
+          <div class="col field"><label for="f_recTo">Received to</label><input type="date" id="f_recTo"></div>
+        </div>
+        <div style="display:flex; gap:9px; margin:4px 0 14px;">
+          <button type="submit" class="btn sm">Find lots</button>
+          <button type="button" class="btn ghost sm" id="clearBtn">Clear</button>
+          <button type="button" class="btn ghost sm" id="heldBtn">Show lots on hold</button>
+        </div>
+      </form>
+    </section>
+    <div id="lotsOut"></div>
+    <div id="impactOut"></div>
+    <div id="status" class="mono no-print" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+  </div>
+</main>
+
+<dialog id="openDialog"><form id="openForm" method="dialog"></form></dialog>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=13"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=5"></script>
+<script src="js/lot-holds.js?v=1"></script>
+<script>
+  // Recalls. Find every lot a supplier's notice covers (by product, supplier,
+  // lot numbers, best-before or received dates), see where each went — the
+  // customers it was delivered to, the orders still here that carry it, and
+  // what's left on the shelf — put the lots on hold so nothing else goes out,
+  // and work through the contact list. A recall (real, or a timed mock drill)
+  // is a Recalls row, the customers told are RecallContacts rows, and holds
+  // are LotHolds rows (js/lot-holds.js). Stock figures are worked out from
+  // Deliveries and Allocations each time, as everywhere else.
+  let token = null;
+  let data = null;
+  let lots = [];            // lot facts in the current view (search results or a recall's scope)
+  let selected = new Set(); // lot keys ticked
+  let recall = null;        // the open recall's row ({ rowNumber, obj }), with ?id=
+  let searched = false;
+
+  const num = v => parseFloat(v) || 0;
+  const round = n => Math.round(n * 1000) / 1000;
+  const keyOf = (code, lot) => `${code}|${lot}`;
+  const normLot = s => String(s || '').toUpperCase().replace(/[\s\-_.\/]/g, '');
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    document.getElementById('recallCard').style.display = ok ? 'block' : 'none';
+    return ok;
+  }
+  function toObjects(rows) {
+    if (!rows.length) return [];
+    const [head, ...rest] = rows;
+    return rest.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+  }
+  async function loadTab(spreadsheetId, tab) {
+    try {
+      const rows = await sheetsGet(spreadsheetId, `${tab}!A:Z`);
+      const [head = [], ...rest] = rows;
+      return { exists: true, headers: head, rows: rest.map((r, i) => ({ rowNumber: i + 2, obj: Object.fromEntries(head.map((h, c) => [h, r[c] ?? ''])) })) };
+    } catch (err) {
+      return { exists: false, headers: [], rows: [] };
+    }
+  }
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso.slice(0, 10) + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  function fmtStamp(s) {
+    if (!s) return '—';
+    const d = new Date(s.replace(' ', 'T'));
+    return isNaN(d) ? s : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function fmtDuration(from, to) {
+    const a = new Date((from || '').replace(' ', 'T')), b = to ? new Date(to.replace(' ', 'T')) : new Date();
+    if (isNaN(a) || isNaN(b)) return '';
+    const mins = Math.max(0, Math.round((b - a) / 60000));
+    const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+    return [d ? `${d} d` : '', h ? `${h} h` : '', `${m} min`].filter(Boolean).join(' ');
+  }
+  // Quantities in mixed units add up per unit: "12.4 kg + 6 pc".
+  function sumByUnit(items) {
+    const t = {};
+    items.forEach(x => { if (Math.abs(x.qty) > 0.0001) t[x.unit] = (t[x.unit] || 0) + x.qty; });
+    const parts = Object.entries(t).map(([u, q]) => qtyUnit(round(q), u));
+    return parts.length ? parts.join(' + ') : '0';
+  }
+  const nameOf = code => data.productByCode[code]?.['Product name'] || code;
+  const statusOf = o => o.STATUS || 'New';
+
+  async function loadAll() {
+    if (!requireAuth()) return;
+    const cfg = getStoredConfig();
+    setStatus('Loading...');
+    try {
+      const groupsP = loadProductGroups(cfg.spreadsheetId);
+      const [productRows, deliveryRows, allocRows, lineRows, orderRows, customerRows, recallsTab, contactsTab] = await Promise.all([
+        sheetsGet(cfg.spreadsheetId, 'Products!A:AZ'),
+        sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z'),
+        sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z'),
+        sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z'),
+        sheetsGet(cfg.spreadsheetId, 'Orders!A:Z'),
+        sheetsGet(cfg.spreadsheetId, 'Customers!A:Z'),
+        loadTab(cfg.spreadsheetId, 'Recalls'),
+        loadTab(cfg.spreadsheetId, 'RecallContacts'),
+        loadLotHolds(cfg.spreadsheetId)
+      ]);
+      const products = toObjects(productRows);
+      registerProducts(products);
+      registerProductGroups(await groupsP);
+      data = {
+        products,
+        productByCode: Object.fromEntries(products.map(p => [p['Product code'], p])),
+        deliveries: toObjects(deliveryRows),
+        allocs: toObjects(allocRows),
+        lineById: Object.fromEntries(toObjects(lineRows).map(l => [l.ID, l])),
+        orderById: Object.fromEntries(toObjects(orderRows).map(o => [o.ID, o])),
+        customerByName: Object.fromEntries(toObjects(customerRows).map(c => [c['Customer name (as in Xero)'], c])),
+        recalls: recallsTab,
+        contacts: contactsTab
+      };
+      data.facts = buildLotFacts();
+      fillFindForm();
+
+      const missing = [!LOT_HOLDS_TAB && 'LotHolds', !recallsTab.exists && 'Recalls', !contactsTab.exists && 'RecallContacts'].filter(Boolean);
+      document.getElementById('setupNote').innerHTML = missing.length
+        ? `<div class="note no-print">The ${missing.join(', ')} tab${missing.length > 1 ? 's don’t' : ' doesn’t'} exist yet, so lots can be found but not held or recorded. Run <a href="setup.html" style="color:inherit; text-decoration:underline;">Setup</a> once to add ${missing.length > 1 ? 'them' : 'it'}.</div>` : '';
+
+      const id = new URLSearchParams(location.search).get('id');
+      recall = id ? recallsTab.rows.find(r => r.obj.ID === id) || null : null;
+      if (id && !recall) setStatus(`Recall ${id} not found.`, 'error');
+      if (recall) showRecall(); else showIndex();
+      // From a lot's trace page: ?lot=…&code=… starts with that lot found.
+      const qLot = new URLSearchParams(location.search).get('lot');
+      if (!recall && qLot) {
+        document.getElementById('f_lots').value = qLot;
+        const qCode = new URLSearchParams(location.search).get('code');
+        if (qCode) document.getElementById('f_product').value = qCode;
+        search();
+      }
+      if (!(id && !recall) && !new URLSearchParams(location.search).get('lot')) setStatus('');
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  // One entry per product + lot ever received: where it came from and where
+  // every bit of it went. Allocations with PO LINE ID are reservations on
+  // stock not here yet, so they're no lot's.
+  function buildLotFacts() {
+    const facts = {};
+    data.deliveries.forEach(d => {
+      const code = d['PRODUCT CODE'], lot = d['BATCH/LOT NUMBER'];
+      if (!code || !lot) return;
+      const k = keyOf(code, lot);
+      const f = facts[k] || (facts[k] = { key: k, code, lot, unit: d.UNIT || 'kg', suppliers: new Set(), pos: new Set(), received: '', bbe: '', qtyIn: 0, delivered: 0, open: 0, removed: 0, allocs: [] });
+      f.qtyIn += num(d['QTY RECEIVED']);
+      if (d.SUPPLIER) f.suppliers.add(d.SUPPLIER);
+      if (d['PO ID']) f.pos.add(d['PO ID']);
+      if (d['DATE RECEIVED'] && (!f.received || d['DATE RECEIVED'] < f.received)) f.received = d['DATE RECEIVED'];
+      if (d['BEST BEFORE DATE'] && (!f.bbe || d['BEST BEFORE DATE'] < f.bbe)) f.bbe = d['BEST BEFORE DATE'];
+    });
+    data.allocs.forEach(a => {
+      if (a['PO LINE ID']) return;
+      const f = facts[keyOf(a['PRODUCT CODE'], a['BATCH/LOT NUMBER'])];
+      if (!f) return;
+      const qty = num(a['QTY ALLOCATED']);
+      if (a['ORDER LINE ID'] === 'ADJUSTMENT') { f.removed += qty; return; }
+      const line = data.lineById[a['ORDER LINE ID']];
+      const order = line && data.orderById[line['ORDER ID']];
+      if (!order) { f.removed += qty; return; }
+      const dispatched = statusOf(order) === 'Dispatched';
+      if (dispatched) f.delivered += qty; else f.open += qty;
+      f.allocs.push({ a, line, order, qty, dispatched });
+    });
+    Object.values(facts).forEach(f => { f.left = round(f.qtyIn - f.delivered - f.open - f.removed); });
+    return facts;
+  }
+
+  function fillFindForm() {
+    const opts = new Set();
+    data.products.forEach(p => { opts.add(p['Product name']); });
+    document.getElementById('productList').innerHTML = [...opts].filter(Boolean).sort().map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+    const suppliers = [...new Set(data.deliveries.map(d => d.SUPPLIER).filter(Boolean))].sort();
+    document.getElementById('f_supplier').innerHTML = '<option value="">Any supplier</option>' + suppliers.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  }
+
+  // The product codes a product search means: the matching SKUs, plus the
+  // wheel a matched portion is cut from (cut stock is allocated from the
+  // wheel's lots), the portions of a matched wheel, and the product's other
+  // SKUs (Group ID) — a recall is usually of the cheese, not one size of it.
+  function codesForProduct(q) {
+    const t = searchNorm(q);
+    const exact = data.products.filter(p => searchNorm(p['Product name']) === t || searchNorm(p['Product code']) === t);
+    const hits = exact.length ? exact : data.products.filter(p => searchMatch(`${p['Product name']} ${p['Product code']}`, t));
+    const codes = new Set(hits.map(p => p['Product code']));
+    hits.forEach(p => { if (p['Cut from (code)']) codes.add(p['Cut from (code)']); });
+    const groups = new Set(hits.map(p => p['Group ID']).filter(Boolean));
+    data.products.forEach(p => {
+      if (groups.has(p['Group ID']) || codes.has(p['Cut from (code)'])) codes.add(p['Product code']);
+    });
+    [...codes].forEach(c => { const p = data.productByCode[c]; if (p && p['Cut from (code)']) codes.add(p['Cut from (code)']); });
+    return codes;
+  }
+
+  function readFilters() {
+    const v = id => document.getElementById(id).value.trim();
+    return {
+      product: v('f_product'), supplier: v('f_supplier'),
+      lots: v('f_lots').split(/[\s,;]+/).map(normLot).filter(Boolean),
+      bbeFrom: v('f_bbeFrom'), bbeTo: v('f_bbeTo'), recFrom: v('f_recFrom'), recTo: v('f_recTo')
+    };
+  }
+
+  function search() {
+    const f = readFilters();
+    if (!f.product && !f.supplier && !f.lots.length && !f.bbeFrom && !f.bbeTo && !f.recFrom && !f.recTo) {
+      setStatus('Fill in at least one thing to search by.', 'error');
+      return;
+    }
+    const codes = f.product ? codesForProduct(f.product) : null;
+    const lotSet = new Set(f.lots);
+    lots = Object.values(data.facts).filter(x =>
+      (!codes || codes.has(x.code)) &&
+      (!f.supplier || x.suppliers.has(f.supplier)) &&
+      (!lotSet.size || lotSet.has(normLot(x.lot))) &&
+      (!f.bbeFrom || (x.bbe && x.bbe >= f.bbeFrom)) && (!f.bbeTo || (x.bbe && x.bbe <= f.bbeTo)) &&
+      (!f.recFrom || (x.received && x.received >= f.recFrom)) && (!f.recTo || (x.received && x.received <= f.recTo))
+    );
+    sortLots();
+    selected = new Set(lots.map(x => x.key));
+    searched = true;
+    setStatus(`${lots.length} lot(s) found.`, lots.length ? 'ok' : '');
+    render();
+  }
+
+  function sortLots() {
+    lots.sort((a, b) => nameOf(a.code).localeCompare(nameOf(b.code)) || (a.bbe || '9999').localeCompare(b.bbe || '9999') || a.lot.localeCompare(b.lot));
+  }
+
+  function showHeld() {
+    lots = Object.values(data.facts).filter(x => lotHold(x.code, x.lot));
+    sortLots();
+    selected = new Set(lots.map(x => x.key));
+    searched = true;
+    render();
+  }
+
+  // ---- views ----
+
+  function showIndex() {
+    document.getElementById('pageTitle').textContent = 'Recalls';
+    document.getElementById('recallHead').innerHTML = '';
+    document.getElementById('findPanel').style.display = '';
+    renderRecallList();
+    render();
+  }
+
+  function showRecall() {
+    const r = recall.obj;
+    document.getElementById('pageTitle').textContent = `${r.TYPE === 'Mock' ? 'Mock recall' : 'Recall'} ${r.ID}`;
+    document.getElementById('recallList').innerHTML = '';
+    document.getElementById('findPanel').style.display = 'none';
+    lots = (r.LOTS || '').split('\n').map(s => s.trim()).filter(Boolean).map(s => {
+      const i = s.indexOf('|');
+      const code = s.slice(0, i), lot = s.slice(i + 1);
+      return data.facts[keyOf(code, lot)] || { key: keyOf(code, lot), code, lot, unit: '', suppliers: new Set(), pos: new Set(), received: '', bbe: '', qtyIn: 0, delivered: 0, open: 0, removed: 0, left: 0, allocs: [], missing: true };
+    });
+    sortLots();
+    selected = new Set(lots.map(x => x.key));
+    renderRecallHead();
+    render();
+  }
+
+  function renderRecallList() {
+    const rows = data.recalls.rows.slice().sort((a, b) => (a.obj.CLOSED ? 1 : 0) - (b.obj.CLOSED ? 1 : 0) || (b.obj.OPENED || '').localeCompare(a.obj.OPENED || ''));
+    document.getElementById('recallList').innerHTML = rows.length ? `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h"><h3>Recalls and mock drills</h3></div>
+        <div class="scroll" style="overflow-x:auto;">
+          <table><thead><tr><th>Recall</th><th>Type</th><th>What</th><th>Opened</th><th>Status</th><th class="num">Lots</th><th class="num">Customers told</th></tr></thead>
+          <tbody>${rows.map(({ obj: r }) => {
+            const told = new Set(data.contacts.rows.filter(c => c.obj['RECALL ID'] === r.ID).map(c => c.obj.CUSTOMER)).size;
+            const nLots = (r.LOTS || '').split('\n').filter(s => s.trim()).length;
+            return `<tr>
+              <td><a href="recall.html?id=${encodeURIComponent(r.ID)}"><strong>${escapeHtml(r.ID)}</strong></a></td>
+              <td>${r.TYPE === 'Mock' ? '<span class="tag t-chill">Mock</span>' : '<span class="tag t-crit">Real</span>'}</td>
+              <td>${escapeHtml(r.TITLE) || '—'}</td>
+              <td>${escapeHtml(fmtStamp(r.OPENED))}</td>
+              <td>${r.CLOSED ? `<span class="tag t-ok">Closed</span> <span class="muted" style="font-size:12px;">after ${escapeHtml(fmtDuration(r.OPENED, r.CLOSED))}</span>` : '<span class="tag t-warn">Open</span>'}</td>
+              <td class="num">${nLots}</td>
+              <td class="num">${told}</td>
+            </tr>`;
+          }).join('')}</tbody></table>
+        </div>
+      </section>` : '';
+  }
+
+  function renderRecallHead() {
+    const r = recall.obj;
+    const mock = r.TYPE === 'Mock';
+    document.getElementById('recallHead').innerHTML = `
+      <p class="no-print" style="margin:-6px 0 14px;"><a href="recall.html">← All recalls</a></p>
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          <h3>${escapeHtml(r.TITLE || 'Untitled recall')}</h3>
+          ${mock ? '<span class="tag t-chill">Mock drill</span>' : '<span class="tag t-crit">Real recall</span>'}
+          ${r.CLOSED ? '<span class="tag t-ok">Closed</span>' : '<span class="tag t-warn">Open</span>'}
+          <span style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;" class="no-print">
+            <button type="button" class="btn ghost sm" id="printBtn">Print report</button>
+            ${r.CLOSED ? '' : `<button type="button" class="btn sm" id="closeRecallBtn">${mock ? 'Finish drill' : 'Close recall'}</button>`}
+          </span>
+        </div>
+        <div class="trace-stats">
+          <div><div class="l">Opened</div><div class="n" style="font-size:15px;">${escapeHtml(fmtStamp(r.OPENED))}</div><div class="muted" style="font-size:12px;">${escapeHtml(r['OPENED BY'] || '')}</div></div>
+          <div><div class="l">${r.CLOSED ? 'Closed' : 'Open for'}</div><div class="n" style="font-size:15px;">${escapeHtml(r.CLOSED ? fmtStamp(r.CLOSED) : fmtDuration(r.OPENED))}</div><div class="muted" style="font-size:12px;">${escapeHtml(r.CLOSED ? r['CLOSED BY'] || '' : '')}</div></div>
+          ${r.CLOSED ? `<div><div class="l">Took</div><div class="n" style="font-size:15px;">${escapeHtml(fmtDuration(r.OPENED, r.CLOSED))}</div></div>` : ''}
+        </div>
+        ${r.REASON || r.NOTES ? `<div style="padding:12px 20px; font-size:13.5px;">${r.REASON ? `<div><strong>Reason:</strong> ${escapeHtml(r.REASON)}</div>` : ''}${r.NOTES ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.NOTES)}</div>` : ''}</div>` : ''}
+      </section>
+      ${mock ? '<div class="note info no-print">A mock drill: lots aren’t put on hold unless you do it below, and nothing is sent. Work through the list as you would for real; finishing the drill records how long it took.</div>' : ''}`;
+    const pb = document.getElementById('printBtn');
+    if (pb) pb.onclick = () => window.print();
+    const cb = document.getElementById('closeRecallBtn');
+    if (cb) cb.onclick = closeRecall;
+  }
+
+  function render() {
+    renderLots();
+    renderImpact();
+  }
+
+  function renderLots() {
+    const out = document.getElementById('lotsOut');
+    if (!recall && !searched) { out.innerHTML = ''; return; }
+    if (!lots.length) {
+      out.innerHTML = `<div class="panel"><div class="empty" style="padding:24px;">${recall ? 'This recall has no lots.' : 'No lots match. Lot numbers are matched ignoring spaces, dashes and case; try fewer filters.'}</div></div>`;
+      return;
+    }
+    const canHold = LOT_HOLDS_TAB;
+    const sel = lots.filter(x => selected.has(x.key));
+    const toHold = sel.filter(x => !lotHold(x.code, x.lot) && !x.missing);
+    const toRelease = sel.filter(x => lotHold(x.code, x.lot));
+    const closed = recall && recall.obj.CLOSED;
+    out.innerHTML = `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          <h3>${recall ? 'Lots in this recall' : `${lots.length} lot(s) found`}</h3>
+          <span class="muted" style="font-size:13px;">${sel.length} ticked</span>
+          <span style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;" class="no-print">
+            ${canHold && toHold.length ? `<button type="button" class="btn ghost sm" id="holdBtn">Put ${toHold.length} on hold</button>` : ''}
+            ${canHold && toRelease.length ? `<button type="button" class="btn ghost sm" id="releaseBtn">Release ${toRelease.length}</button>` : ''}
+            ${!recall && data.recalls.exists && sel.length ? `
+              <button type="button" class="btn ghost sm" data-open="Mock">Start mock drill</button>
+              <button type="button" class="btn sm" data-open="Real">Open recall</button>` : ''}
+          </span>
+        </div>
+        <div class="scroll" style="overflow-x:auto;">
+          <table><thead><tr>
+            <th class="no-print" style="width:34px;"><input type="checkbox" id="allChk" aria-label="Tick all" ${sel.length === lots.length ? 'checked' : ''}${closed ? ' disabled' : ''}></th>
+            <th>Product</th><th>Lot</th><th>Supplier</th><th>Received</th><th>Best before</th>
+            <th class="num">Received qty</th><th class="num">Delivered</th><th class="num">On open orders</th><th class="num">Removed</th><th class="num">On shelf</th><th></th>
+          </tr></thead>
+          <tbody>${lots.map(x => {
+            const hold = lotHold(x.code, x.lot);
+            const fmt = n => escapeHtml(qtyUnit(round(n), x.unit));
+            return `<tr${selected.has(x.key) ? '' : ' style="opacity:.55;"'}>
+              <td class="no-print"><input type="checkbox" data-key="${escapeHtml(x.key)}" ${selected.has(x.key) ? 'checked' : ''}${closed ? ' disabled' : ''} aria-label="Tick lot ${escapeHtml(x.lot)}"></td>
+              <td style="min-width:190px;">${productCell(data.productByCode[x.code], `<strong>${escapeHtml(nameOf(x.code))}</strong><br><span class="code">${escapeHtml(x.code)}</span>`)}</td>
+              <td class="code" style="white-space:nowrap;"><a href="trace.html?lot=${encodeURIComponent(x.lot)}&code=${encodeURIComponent(x.code)}" title="Full trace of this lot">${escapeHtml(x.lot)}</a></td>
+              <td>${escapeHtml([...x.suppliers].join(', ')) || '—'}${x.pos.size ? `<br>${[...x.pos].map(p => `<a class="code" href="purchase-orders.html?open=${encodeURIComponent(p)}">${escapeHtml(p)}</a>`).join(' ')}` : ''}</td>
+              <td style="white-space:nowrap;">${escapeHtml(fmtDate(x.received))}</td>
+              <td style="white-space:nowrap;">${escapeHtml(fmtDate(x.bbe))}</td>
+              <td class="num">${x.missing ? '<span class="muted">Not received</span>' : fmt(x.qtyIn)}</td>
+              <td class="num">${x.delivered > 0.0001 ? `<strong>${fmt(x.delivered)}</strong>` : '—'}</td>
+              <td class="num">${x.open > 0.0001 ? `<span class="neg">${fmt(x.open)}</span>` : '—'}</td>
+              <td class="num">${x.removed > 0.0001 ? fmt(x.removed) : '—'}</td>
+              <td class="num">${x.left > 0.0001 ? fmt(x.left) : '—'}</td>
+              <td>${lotHoldTag(hold)}</td>
+            </tr>`;
+          }).join('')}</tbody></table>
+        </div>
+      </section>`;
+    out.querySelectorAll('[data-key]').forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) selected.add(cb.dataset.key); else selected.delete(cb.dataset.key);
+      render();
+    }));
+    const all = out.querySelector('#allChk');
+    if (all) all.addEventListener('change', () => { selected = all.checked ? new Set(lots.map(x => x.key)) : new Set(); render(); });
+    const hb = out.querySelector('#holdBtn');
+    if (hb) hb.onclick = () => holdLots(toHold, recall ? recall.obj.ID : '', recall ? recall.obj.TITLE || recall.obj.REASON : '');
+    const rb = out.querySelector('#releaseBtn');
+    if (rb) rb.onclick = () => releaseLots(toRelease);
+    out.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openRecallDialog(b.dataset.open));
+  }
+
+  // Who has had the ticked lots (dispatched orders — the contact list), the
+  // orders still here that carry them, and what's left on the shelf.
+  function impactOf() {
+    const sel = lots.filter(x => selected.has(x.key));
+    const byCustomer = {};
+    const stillHere = [];
+    sel.forEach(x => x.allocs.forEach(r => {
+      const item = { code: r.line['PRODUCT CODE'], lotCode: x.code, lot: x.lot, bbe: x.bbe, qty: r.qty, unit: x.unit, order: r.order };
+      if (!r.dispatched) { stillHere.push(item); return; }
+      const name = r.order.CUSTOMER || '(no customer)';
+      const c = byCustomer[name] || (byCustomer[name] = { name, cust: data.customerByName[name] || {}, orders: {} });
+      const o = c.orders[r.order.ID] || (c.orders[r.order.ID] = { order: r.order, items: [] });
+      const same = o.items.find(i => i.code === item.code && i.lot === item.lot);
+      if (same) same.qty += item.qty; else o.items.push(item);
+    }));
+    const customers = Object.values(byCustomer).sort((a, b) => a.name.localeCompare(b.name));
+    stillHere.sort((a, b) => (a.order['DELIVERY DATE'] || '').localeCompare(b.order['DELIVERY DATE'] || ''));
+    return { sel, customers, stillHere, shelf: sel.filter(x => x.left > 0.0001) };
+  }
+
+  function contactOf(name) {
+    if (!recall) return null;
+    const rows = data.contacts.rows.filter(c => c.obj['RECALL ID'] === recall.obj.ID && c.obj.CUSTOMER === name);
+    return rows.length ? rows[rows.length - 1].obj : null;
+  }
+
+  function renderImpact() {
+    const out = document.getElementById('impactOut');
+    if (!lots.length || (!recall && !searched)) { out.innerHTML = ''; return; }
+    const { sel, customers, stillHere, shelf } = impactOf();
+    if (!sel.length) { out.innerHTML = '<div class="muted" style="font-size:13px;">Tick the lots the recall covers to see where they went.</div>'; return; }
+    const closed = recall && recall.obj.CLOSED;
+    const told = customers.filter(c => contactOf(c.name)).length;
+    const itemsHtml = items => items.map(i => `${escapeHtml(nameOf(i.code))} · <span class="code">${escapeHtml(i.lot)}</span> · ${escapeHtml(qtyUnit(round(i.qty), i.unit))}`).join('<br>');
+    out.innerHTML = `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="trace-stats" style="border-top:none;">
+          <div><div class="l">Lots</div><div class="n">${sel.length}</div></div>
+          <div><div class="l">Received</div><div class="n">${escapeHtml(sumByUnit(sel.map(x => ({ qty: x.qtyIn, unit: x.unit }))))}</div></div>
+          <div><div class="l">Delivered to ${customers.length} customer(s)</div><div class="n">${escapeHtml(sumByUnit(sel.map(x => ({ qty: x.delivered, unit: x.unit }))))}</div></div>
+          <div><div class="l">On orders still here</div><div class="n"${stillHere.length ? ' style="color:var(--crit);"' : ''}>${escapeHtml(sumByUnit(stillHere))}</div></div>
+          <div><div class="l">On the shelf</div><div class="n">${escapeHtml(sumByUnit(shelf.map(x => ({ qty: x.left, unit: x.unit }))))}</div></div>
+          ${recall ? `<div><div class="l">Customers told</div><div class="n"${told < customers.length ? ' style="color:var(--warn);"' : ''}>${told} of ${customers.length}</div></div>` : ''}
+        </div>
+      </section>
+
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          <h3>Customers to contact</h3>
+          <span class="muted" style="font-size:13px;">Delivered orders that carried these lots</span>
+          ${customers.length ? '<button type="button" class="btn ghost sm no-print" id="csvBtn" style="margin-left:auto;">Export CSV</button>' : ''}
+        </div>
+        ${customers.length ? `<div class="scroll" style="overflow-x:auto;">
+          <table><thead><tr><th>Customer</th><th>Contact</th><th>Orders</th><th>What they had</th>${recall ? '<th>Told</th>' : ''}</tr></thead>
+          <tbody>${customers.map(c => {
+            const orders = Object.values(c.orders).sort((a, b) => (a.order['DELIVERY DATE'] || '').localeCompare(b.order['DELIVERY DATE'] || ''));
+            const contact = contactOf(c.name);
+            const email = c.cust['Contact email'];
+            return `<tr>
+              <td><strong>${escapeHtml(c.name)}</strong>${c.cust['Delivery address'] ? `<div class="muted" style="font-size:12px; max-width:220px;">${escapeHtml(c.cust['Delivery address'])}</div>` : ''}</td>
+              <td>${email ? `<a href="${escapeHtml(mailtoFor(c, orders))}">${escapeHtml(email)}</a>` : '<span class="muted">No email on file</span>'}</td>
+              <td style="white-space:nowrap;">${orders.map(o => `<a href="orders.html?open=${encodeURIComponent(o.order.ID)}">${escapeHtml(o.order.ID)}</a> <span class="muted">${escapeHtml(fmtDate(o.order['DELIVERY DATE']))}</span>`).join('<br>')}</td>
+              <td style="font-size:13px;">${orders.map(o => itemsHtml(o.items)).join('<br>')}</td>
+              ${recall ? `<td style="min-width:200px;">${contact
+                ? `<span class="tag t-ok">Told</span> <span style="font-size:12.5px;">${escapeHtml(fmtStamp(contact['CONTACTED AT']))}${contact['CONTACTED BY'] ? ' · ' + escapeHtml(contact['CONTACTED BY']) : ''}</span>${contact.NOTES ? `<div class="muted" style="font-size:12px;">${escapeHtml(contact.NOTES)}</div>` : ''}`
+                : closed ? '<span class="tag t-warn">Not recorded</span>'
+                : `<div class="no-print" style="display:flex; gap:6px;"><input type="text" data-note="${escapeHtml(c.name)}" placeholder="Note (how, what agreed)" style="padding:5px 9px; font-size:12.5px;"><button type="button" class="btn sm" data-told="${escapeHtml(c.name)}">Told</button></div><span class="print-only">☐</span>`}</td>` : ''}
+            </tr>`;
+          }).join('')}</tbody></table></div>`
+          : '<p class="muted" style="font-size:13px; padding:14px 20px; margin:0;">None of these lots has been delivered to a customer.</p>'}
+      </section>
+
+      ${stillHere.length ? `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          <h3>Still here — on orders not dispatched</h3>
+          <span class="muted" style="font-size:13px;">Open each order → <strong>Lots</strong> on the line → remove the held lot and allocate another (or Replace)</span>
+        </div>
+        <div class="scroll" style="overflow-x:auto;">
+          <table><thead><tr><th>Customer</th><th>Order</th><th>Delivery</th><th>Status</th><th>Product</th><th>Lot</th><th class="num">Qty</th></tr></thead>
+          <tbody>${stillHere.map(i => `<tr>
+            <td>${escapeHtml(i.order.CUSTOMER)}</td>
+            <td><a href="orders.html?open=${encodeURIComponent(i.order.ID)}">${escapeHtml(i.order.ID)}</a></td>
+            <td style="white-space:nowrap;">${escapeHtml(fmtDate(i.order['DELIVERY DATE']))}</td>
+            <td>${escapeHtml(statusOf(i.order))}</td>
+            <td>${escapeHtml(nameOf(i.code))}</td>
+            <td class="code">${escapeHtml(i.lot)} ${lotHoldTag(lotHold(i.lotCode, i.lot))}</td>
+            <td class="num">${escapeHtml(qtyUnit(round(i.qty), i.unit))}</td>
+          </tr>`).join('')}</tbody></table>
+        </div>
+      </section>` : ''}
+
+      ${shelf.length ? `
+      <section class="panel" style="margin-bottom:18px; overflow:hidden;">
+        <div class="panel-h">
+          <h3>On the shelf</h3>
+          <span class="muted" style="font-size:13px;">Keep it on hold until it’s returned or destroyed, then take it off stock with Stock → Adjust stock → Remove</span>
+        </div>
+        <div class="scroll" style="overflow-x:auto;">
+          <table><thead><tr><th>Product</th><th>Lot</th><th>Best before</th><th class="num">Left</th><th></th></tr></thead>
+          <tbody>${shelf.map(x => `<tr>
+            <td>${escapeHtml(nameOf(x.code))} <span class="code">${escapeHtml(x.code)}</span></td>
+            <td class="code">${escapeHtml(x.lot)}</td>
+            <td>${escapeHtml(fmtDate(x.bbe))}</td>
+            <td class="num">${escapeHtml(qtyUnit(x.left, x.unit))}</td>
+            <td>${lotHoldTag(lotHold(x.code, x.lot)) || '<span class="tag t-warn">Not on hold</span>'}</td>
+          </tr>`).join('')}</tbody></table>
+        </div>
+      </section>` : ''}
+      ${recall ? `<p class="print-only muted" style="font-size:11px;">Report printed ${escapeHtml(fmtStamp(localStamp()))}${currentUserLabel() ? ' by ' + escapeHtml(currentUserLabel()) : ''}.</p>` : ''}`;
+
+    const csv = out.querySelector('#csvBtn');
+    if (csv) csv.onclick = () => exportCsv(customers);
+    out.querySelectorAll('[data-told]').forEach(b => b.onclick = () => {
+      const note = out.querySelector(`[data-note="${CSS.escape(b.dataset.told)}"]`);
+      markTold(b.dataset.told, note ? note.value.trim() : '');
+    });
+  }
+
+  // A draft email in the person's own mail app — nothing is sent from here.
+  function mailtoFor(c, orders) {
+    const items = orders.flatMap(o => o.items.map(i => `- ${nameOf(i.code)}, lot ${i.lot}${i.bbe ? `, best before ${fmtDate(i.bbe)}` : ''}: ${qtyUnit(round(i.qty), i.unit)} (order ${o.order.ID}, delivered ${fmtDate(o.order['DELIVERY DATE'])})`));
+    const what = [...new Set(orders.flatMap(o => o.items.map(i => nameOf(i.code))))].join(', ');
+    const subject = `Product recall: ${what}`;
+    const body = [
+      `Hello,`, ``,
+      `We are recalling the following product${items.length > 1 ? 's' : ''}, which our records show we delivered to you:`, ``,
+      ...items, ``,
+      ...(recall && recall.obj.REASON ? [`Reason: ${recall.obj.REASON}`, ``] : []),
+      `Please stop selling it, set aside any you still have, and reply to let us know how much is left. We will arrange collection or credit.`, ``,
+      `Thank you,`, `Provisions`
+    ].join('\n');
+    return `mailto:${c.cust['Contact email']}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+
+  function exportCsv(customers) {
+    const head = ['Customer', 'Contact email', 'Delivery address', 'Order', 'Delivery date', 'Product code', 'Product', 'Lot', 'Best before', 'Qty', 'Unit', 'Told at', 'Told by', 'Notes'];
+    const rows = [head];
+    customers.forEach(c => {
+      const contact = contactOf(c.name) || {};
+      Object.values(c.orders).forEach(o => o.items.forEach(i => rows.push([
+        c.name, c.cust['Contact email'] || '', c.cust['Delivery address'] || '', o.order.ID, o.order['DELIVERY DATE'] || '',
+        i.code, nameOf(i.code), i.lot, i.bbe || '', round(i.qty), i.unit, contact['CONTACTED AT'] || '', contact['CONTACTED BY'] || '', contact.NOTES || ''
+      ])));
+    });
+    const cell = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const blob = new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${recall ? recall.obj.ID : 'recall'}-customers-${localStamp().slice(0, 10)}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ---- writes ----
+
+  function idRows(rows) { return [['ID'], ...rows.map(r => [r.obj.ID])]; }
+
+  function holdRowsFor(list, recallId, reason) {
+    const existing = idRows(LOT_HOLD_ROWS);
+    return list.map(x => {
+      const id = nextId(existing, 'HLD');
+      existing.push([id]);
+      return [id, x.code, x.lot, reason || '', recallId || '', localStamp(), currentUserLabel(), '', ''];
+    });
+  }
+
+  async function holdLots(list, recallId, reason) {
+    if (!list.length) return;
+    if (!recallId) {
+      const why = prompt(`Put ${list.length} lot(s) on hold. Reason (optional):`, '');
+      if (why === null) return;
+      reason = why.trim();
+    }
+    const cfg = getStoredConfig();
+    setStatus('Putting lots on hold...');
+    try {
+      // Re-read so two people holding at once don't make the same ID.
+      await loadLotHolds(cfg.spreadsheetId);
+      const fresh = list.filter(x => !lotHold(x.code, x.lot));
+      if (fresh.length) await sheetsAppendRows(cfg.spreadsheetId, 'LotHolds!A:I', holdRowsFor(fresh, recallId, reason));
+      await loadLotHolds(cfg.spreadsheetId);
+      showToast(`${fresh.length} lot(s) on hold`);
+      setStatus('');
+      render();
+    } catch (err) {
+      setStatus('Error holding lots: ' + err.message, 'error');
+    }
+  }
+
+  async function releaseLots(list) {
+    if (!list.length || !confirm(`Release ${list.length} lot(s)? They can be allocated to orders again.`)) return;
+    const cfg = getStoredConfig();
+    setStatus('Releasing...');
+    try {
+      await loadLotHolds(cfg.spreadsheetId);
+      const atCol = colLetter(LOT_HOLD_HEADERS.indexOf('RELEASED AT') + 1);
+      const byCol = colLetter(LOT_HOLD_HEADERS.indexOf('RELEASED BY') + 1);
+      const keys = new Set(list.map(x => keyOf(x.code, x.lot)));
+      const stamp = localStamp(), who = currentUserLabel();
+      const updates = LOT_HOLD_ROWS
+        .filter(r => !r.obj['RELEASED AT'] && keys.has(keyOf(r.obj['PRODUCT CODE'], r.obj['BATCH/LOT NUMBER'])))
+        .flatMap(r => [{ range: `LotHolds!${atCol}${r.rowNumber}`, values: [[stamp]] }, { range: `LotHolds!${byCol}${r.rowNumber}`, values: [[who]] }]);
+      if (updates.length) await sheetsBatchUpdateValues(cfg.spreadsheetId, updates);
+      await loadLotHolds(cfg.spreadsheetId);
+      showToast(`${updates.length / 2} lot(s) released`);
+      setStatus('');
+      render();
+    } catch (err) {
+      setStatus('Error releasing: ' + err.message, 'error');
+    }
+  }
+
+  function openRecallDialog(type) {
+    const dlg = document.getElementById('openDialog');
+    const form = document.getElementById('openForm');
+    const mock = type === 'Mock';
+    const sel = lots.filter(x => selected.has(x.key));
+    const names = [...new Set(sel.map(x => nameOf(x.code)))];
+    form.innerHTML = `
+      <div class="dlg-h">
+        <div>
+          <div class="ttl">${mock ? 'Start a mock drill' : 'Open a recall'}</div>
+          <div class="subtitle">${sel.length} lot(s) · ${escapeHtml(names.slice(0, 3).join(', '))}${names.length > 3 ? ` and ${names.length - 3} more` : ''}</div>
+        </div>
+        <button type="button" class="dlg-close" data-cancel aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="dlg-b">
+        <div class="field"><label for="r_title">Title</label><input type="text" id="r_title" value="${escapeHtml(names.length === 1 ? names[0] : '')}" placeholder="e.g. Comté — supplier notice 12 Nov"></div>
+        <div class="field"><label for="r_reason">Reason</label><input type="text" id="r_reason" placeholder="${mock ? 'e.g. Quarterly mock recall' : 'e.g. Listeria found by producer'}" value="${mock ? 'Mock recall drill' : ''}"></div>
+        <div class="field"><label for="r_notes">Notes</label><textarea id="r_notes" rows="2" placeholder="Supplier contact, notice reference…"></textarea></div>
+        ${LOT_HOLDS_TAB ? `<label style="display:flex; gap:8px; align-items:center; text-transform:none; letter-spacing:0; font-size:13.5px; color:var(--ink); font-weight:500;">
+          <input type="checkbox" id="r_hold" ${mock ? '' : 'checked'}> Put these lots on hold now, so no more goes out</label>` : ''}
+        <p class="muted" style="font-size:12.5px; margin:12px 0 0;">The clock starts now: ${mock ? 'finish the drill' : 'close the recall'} once every customer is told, and the time it took goes on the report.</p>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-cancel>Cancel</button>
+        <button type="button" class="btn" id="r_go">${mock ? 'Start drill' : 'Open recall'}</button>
+      </div>`;
+    form.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => dlg.close());
+    form.querySelector('#r_go').onclick = async () => {
+      const btn = form.querySelector('#r_go');
+      btn.disabled = true;
+      const title = form.querySelector('#r_title').value.trim();
+      const reason = form.querySelector('#r_reason').value.trim();
+      const notes = form.querySelector('#r_notes').value.trim();
+      const hold = !!form.querySelector('#r_hold')?.checked;
+      const cfg = getStoredConfig();
+      try {
+        const fresh = await loadTab(cfg.spreadsheetId, 'Recalls');
+        const id = nextId(idRows(fresh.rows), 'RC');
+        await sheetsAppendRows(cfg.spreadsheetId, 'Recalls!A:J', [[
+          id, type, title, reason, sel.map(x => `${x.code}|${x.lot}`).join('\n'), localStamp(), currentUserLabel(), '', '', notes
+        ]]);
+        if (hold) {
+          await loadLotHolds(cfg.spreadsheetId);
+          const toHold = sel.filter(x => !lotHold(x.code, x.lot) && !x.missing);
+          if (toHold.length) await sheetsAppendRows(cfg.spreadsheetId, 'LotHolds!A:I', holdRowsFor(toHold, id, reason || title));
+        }
+        dlg.close();
+        location.href = `recall.html?id=${encodeURIComponent(id)}`;
+      } catch (err) {
+        btn.disabled = false;
+        setStatus('Error opening recall: ' + err.message, 'error');
+        dlg.close();
+      }
+    };
+    dlg.showModal();
+  }
+
+  async function markTold(customer, note) {
+    if (!recall || !data.contacts.exists) return;
+    const cfg = getStoredConfig();
+    setStatus(`Recording ${customer}...`);
+    try {
+      const fresh = await loadTab(cfg.spreadsheetId, 'RecallContacts');
+      const id = nextId(idRows(fresh.rows), 'RCC');
+      await sheetsAppendRows(cfg.spreadsheetId, 'RecallContacts!A:F', [[id, recall.obj.ID, customer, localStamp(), currentUserLabel(), note]]);
+      data.contacts = await loadTab(cfg.spreadsheetId, 'RecallContacts');
+      setStatus('');
+      showToast(`${customer} marked as told`);
+      renderImpact();
+    } catch (err) {
+      setStatus('Error recording: ' + err.message, 'error');
+    }
+  }
+
+  async function closeRecall() {
+    const r = recall.obj;
+    const { customers } = impactOf();
+    const untold = customers.filter(c => !contactOf(c.name)).length;
+    const verb = r.TYPE === 'Mock' ? 'Finish this drill' : 'Close this recall';
+    if (!confirm(`${verb}?${untold ? `\n\n${untold} customer(s) aren’t marked as told yet.` : ''}\n\nHolds stay on until you release them.`)) return;
+    const cfg = getStoredConfig();
+    setStatus('Closing...');
+    try {
+      const head = data.recalls.headers;
+      const fresh = await loadTab(cfg.spreadsheetId, 'Recalls');
+      const row = fresh.rows.find(x => x.obj.ID === r.ID);
+      if (!row) throw new Error(`${r.ID} not found`);
+      const stamp = localStamp();
+      await sheetsBatchUpdateValues(cfg.spreadsheetId, [
+        { range: `Recalls!${colLetter(head.indexOf('CLOSED') + 1)}${row.rowNumber}`, values: [[stamp]] },
+        { range: `Recalls!${colLetter(head.indexOf('CLOSED BY') + 1)}${row.rowNumber}`, values: [[currentUserLabel()]] }
+      ]);
+      recall = { rowNumber: row.rowNumber, obj: { ...row.obj, CLOSED: stamp, 'CLOSED BY': currentUserLabel() } };
+      setStatus('');
+      showToast(r.TYPE === 'Mock' ? `Drill finished in ${fmtDuration(r.OPENED, stamp)}` : 'Recall closed');
+      renderRecallHead();
+      render();
+    } catch (err) {
+      setStatus('Error closing: ' + err.message, 'error');
+    }
+  }
+
+  document.getElementById('findForm').addEventListener('submit', e => { e.preventDefault(); if (data) search(); });
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    document.getElementById('findForm').reset();
+    lots = []; selected = new Set(); searched = false;
+    setStatus('');
+    render();
+  });
+  document.getElementById('heldBtn').addEventListener('click', () => { if (data) showHeld(); });
+  window.addEventListener('load', loadAll);
+</script>
+</body>
+</html>

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -44,11 +44,12 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
-<script src="js/lists-data.js?v=2"></script>
+<script src="js/lot-holds.js?v=1"></script>
+<script src="js/lists-data.js?v=3"></script>
 <script>
   // Picking list: product by product rather than order by order, so each
   // product (and each lot of it) is fetched from the shelf once for every
@@ -132,7 +133,7 @@
     const showDay = !dayFilter && new Set(inWeek.map(o => o['DELIVERY DATE'])).size > 1;
     const fromHtml = r => r.missing ? '<span class="tag t-warn">Not allocated</span>'
       : r.awaiting ? `<span class="tag t-warn" title="Reserved on a purchase order not received yet">Awaiting ${escapeHtml(r.awaiting)}${r.due ? ' · ' + escapeHtml(fmtDateShort(r.due)) : ''}</span>`
-      : `<span class="code">${escapeHtml(r.lot)}</span>`;
+      : `<span class="code">${escapeHtml(r.lot)}</span>${r.hold ? ' ' + lotHoldTag(r.hold) : ''}`;
     const forHtml = r => `${escapeHtml(r.order.CUSTOMER)}${r.order._drop ? ` <span class="muted">· drop ${r.order._drop}</span>` : ''}${r.replaces ? `<div class="replaced-note">replaces ${escapeHtml(r.replaces)}</div>` : ''}`;
 
     out.innerHTML = `

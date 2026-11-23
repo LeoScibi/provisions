@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -34,10 +34,11 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
+<script src="js/lot-holds.js?v=1"></script>
 <script>
   // A lot's whole story on one screen, for recalls: where it came from, which
   // orders it went to (and what each piece weighed), what was wasted, what's
@@ -84,7 +85,8 @@
         sheetsGet(cfg.spreadsheetId, 'OrderLines!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Orders!A:Z', token),
         loadOptionalTab(cfg.spreadsheetId, 'Cuts'),
-        loadOptionalTab(cfg.spreadsheetId, 'Waste')
+        loadOptionalTab(cfg.spreadsheetId, 'Waste'),
+        loadLotHolds(cfg.spreadsheetId)
       ]);
       const products = toObjects(productRows);
       registerProducts(products);
@@ -150,7 +152,9 @@
       <section class="panel" style="margin-bottom:18px; overflow:hidden;">
         <div class="panel-h">
           ${productCell(data.productByCode[code], `<strong>${escapeHtml(nameOf(code))}</strong><br><span class="code">${escapeHtml(code)} · lot ${escapeHtml(lot)}</span>`)}
+          ${lotHoldTag(lotHold(code, lot))}
           <span class="muted" style="margin-left:auto; font-size:13px;">Best before ${escapeHtml(fmtDate(received[0]['BEST BEFORE DATE']))}</span>
+          <a class="btn ghost sm no-print" href="recall.html?lot=${encodeURIComponent(lot)}&code=${encodeURIComponent(code)}">Recall / hold…</a>
         </div>
         <div class="trace-stats">
           <div><div class="l">Received</div><div class="n">${escapeHtml(fmt(totalIn))}</div></div>

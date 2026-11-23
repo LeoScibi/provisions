@@ -165,11 +165,24 @@ models, sheet schemas, or conventions between the two.
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
   another day adds "Requested delivery: …" to the notes. Its button row shows a
   live total ex VAT (`renderOrderTotal()`): list price, as in Reports, less the
-  customer's Discount (%). Clicking a product there opens a lot pop-up
-  (`openLotPicker()`): quantity, plus lots on the shelf and POs arriving with days
-  left, FEFO-prefilled and editable. The choice stays on the draft line (`picks`)
+  customer's Discount (%). A product's **+** (in search, or −/+ on its order line)
+  changes the quantity by one piece/case without a pop-up (`bumpDraft()`); each
+  line shows where its stock comes from as chips — green *In stock* (a lot),
+  blue *Arriving* (a PO reservation), red *Short*. Clicking a product or line
+  opens the lot pop-up (`openLotPicker()`): quantity first, then two tiles (in
+  stock now / arriving before the delivery date) and the FEFO plan in words; the
+  lot tables (`lotTablesHtml()`, shared with the order view's Allocate pop-up)
+  are folded under "Choose lots yourself". Lots chosen there mark the line
+  `custom` and are kept when its quantity changes (an edited order's lines start
+  as `custom: 'order'`). The choice stays on the draft line (`picks`)
   until `autoAllocate()` writes it at placing; POs due too late show but can't be
-  reserved, and a new delivery date re-picks lots that no longer fit. A whole wheel
+  reserved, and a new delivery date re-picks lots that no longer fit.
+  **Fixed-weight products** (Per kg with a Nominal weight, not by the case, not
+  cut from anything — Coppa 2.5kg, Nduja 400g; `productOrderMeta().fixed`) are
+  ordered in whole pieces: the line stays in kilos, always a multiple of the
+  weight, and every lot/PO take is in whole pieces (`fixedPiece()`;
+  `autoAllocate()` never splits one across lots unless an old line isn't a
+  multiple). A whole wheel
   ordered by the piece draws its nominal kilos (`stockSource(code, lineUnit)`). In the order dialog each line shows its free stock;
   **Allocate** opens a pop-up of lots (FEFO-prefilled), **Allocate all**
   fills every line FEFO from a shared pool, and **Replace** swaps a line's
@@ -195,6 +208,24 @@ models, sheet schemas, or conventions between the two.
   last piece is weighed. Removing a line or order also deletes its Cuts.
   `trace.html?lot=…` (linked from Stock's By batch table) shows a lot's
   delivery, customers, piece weights and waste.
+- **Recalls / lot holds** (`recall.html`, `js/lot-holds.js`): find lots by
+  product (a portion or SKU widens to its wheel, portions and Group ID
+  siblings, since cut stock sits on the wheel's lots), supplier, lot numbers
+  (matched ignoring case, spaces, dashes), best-before or received dates; see
+  who had them (dispatched orders — the contact list, CSV, draft emails), the
+  undispatched orders still carrying them, and what's on the shelf.
+  **LotHolds** — one row per product + lot held; active while `RELEASED AT`
+  is blank. `loadLotHolds()` then `lotHold(code, lot)`: `computeAvailableBatches()`
+  in `orders.html` skips held lots (so autoAllocate, Allocate and the lot
+  pickers never offer them), `computeStockPosition()` reports them as `held`
+  and leaves them out of `free`, `packLines()` marks lots `hold` / lines `held`
+  and `listNotesHtml()` warns on the warehouse lists, Today shows alerts.
+  Orders already on a held lot aren't changed automatically — the line says
+  so and is swapped via Lots / Replace. **Recalls** — one per recall or mock
+  drill (`TYPE` Real/Mock), scope in `LOTS` ("CODE|LOT" per line),
+  `OPENED`/`CLOSED` timed for the drill report; **RecallContacts** — each
+  customer marked as told. Closing a recall doesn't release its holds.
+  Timestamps there are local "YYYY-MM-DD HH:MM" (`localStamp()`).
 - **Xero export** (`js/xero-export.js`, the "Export to Xero" button on
   `lists.html`, the Packing page): the week's orders, by delivery date, as a Xero sales-invoice
   import CSV — Xero's template headers exactly, one row per line, DD/MM/YYYY,
@@ -246,6 +277,8 @@ cutting.html                         Weigh each cut piece, record waste (phone-f
 picking.html                         Week's whole items product by product / lot by
                                      lot, with who each is for (by Storage)
 trace.html                           One lot: delivery, customers, weights, waste
+recall.html                          Recalls: find affected lots, hold them, contact
+                                     list, mock-drill timing and printable report
 lists.html                             Packing: slips (each day's truck order, box
                                        counts), delivery notes, box labels,
                                        weekly Xero invoice export

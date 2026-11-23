@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=49">
+<link rel="stylesheet" href="css/style.css?v=50">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -45,11 +45,12 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=12"></script>
+<script src="js/shell.js?v=13"></script>
 <script src="js/util.js?v=3"></script>
-<script src="js/product-ui.js?v=4"></script>
+<script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
-<script src="js/lists-data.js?v=2"></script>
+<script src="js/lot-holds.js?v=1"></script>
+<script src="js/lists-data.js?v=3"></script>
 <script>
   // Cutting list: every cut-to-order portion for the week (or one day),
   // wheel by wheel, so the cutter opens each wheel once and labels each
@@ -117,7 +118,8 @@
           // The wheel lot(s) this piece was allocated from, when it has been.
           lots: [...new Set(data.allocs.filter(a => a['ORDER LINE ID'] === l.ID).map(a => a['PO LINE ID']
             ? `awaiting ${(data.poOfLine[a['PO LINE ID']] || {}).ID || 'PO'}`
-            : a['BATCH/LOT NUMBER']))]
+            : a['BATCH/LOT NUMBER']))],
+          heldLots: data.allocs.filter(a => a['ORDER LINE ID'] === l.ID && !a['PO LINE ID'] && lotHold(a['PRODUCT CODE'], a['BATCH/LOT NUMBER'])).map(a => a['BATCH/LOT NUMBER'])
         });
       });
     });
@@ -159,7 +161,7 @@
                   <td>${escapeHtml(r.customer)}</td>
                   ${showDay ? `<td style="white-space:nowrap;">${escapeHtml(fmtDateShort(r.day))}</td>` : ''}
                   <td>${zoneTag(r.zone)}</td>
-                  <td class="code">${r.lots.length ? r.lots.map(escapeHtml).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
+                  <td class="code">${r.lots.length ? r.lots.map(x => escapeHtml(x) + (r.heldLots.includes(x) ? ' <span class="tag t-crit" title="Recall / quarantine — don’t cut from this wheel">On hold</span>' : '')).join('<br>') : '<span class="tag t-warn">Not allocated</span>'}</td>
                   <td>${r.cutLife ? r.cutLife + ' day(s)' : '—'}</td>
                   <td class="no-print">${orderLink(r.orderId)}</td>
                 </tr>`).join('')}
