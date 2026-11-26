@@ -278,6 +278,25 @@ models, sheet schemas, or conventions between the two.
   `unitPrice()` for the customer on the delivery date (`js/pricing.js`). Reference = the order's `CUSTOMER REF` (the customer's PO number,
   typed in New / Edit order), else the order ID. InvoiceNumber = order ID, so Xero skips an order already imported;
   nothing is written back to the sheet. TEST orders are left out.
+- **Floor checklists** (`checklists.html`, `js/checklists.js`): Opening,
+  Closing, Cleaning, Goods In, Goods Out — the paper HACCP forms
+  (`CHECKLIST_DEFAULTS`, loaded with one button when ChecklistItems is empty).
+  **Staff** (NAME, EMAIL, ROLE Floor/Manager) and **ChecklistItems** (TYPE
+  tick / temp / number / text / choice; temps over `MAX °C` are flagged and
+  need a note, as does a tick marked not done; `DAYS` limits an item to some
+  weekdays — the cleaning schedule) are edited on `checklist-setup.html`.
+  **ChecklistRuns** is one row per filled-in list — one per day, or per PO for
+  Goods In (`REF`) — with `ANSWERS` as JSON including each item's wording, so
+  editing items never rewrites a record. Floor staff share the phone and pick
+  their name (remembered); a draft stays in localStorage until submitted.
+  Submitted → Approved / Sent back (with `MANAGER NOTE`; resubmitting updates
+  the same row). Only a **Manager** approves: the signed-in Google email
+  matching a Staff row (`checklistManager()`). Approving saves the PDF first
+  (`saveChecklistPdf()`: HTML uploaded as a Google Doc, exported as PDF, Doc
+  deleted — drive.file only), into a "Provisions Checklists" folder in that
+  manager's own Drive, then writes `PDF URL`. Goods In is offered from
+  receiving.html's done screen; Today shows checklists to approve, sent back,
+  and daily lists not done (`checklistTodaySummary()`).
 - **StockTakes** / **StockTakeLines** — a physical count session
   (`stock-take.html`). Starting one snapshots every Active product's
   computed on-hand qty into StockTakeLines (`SYSTEM QTY`) with a blank
@@ -316,6 +335,9 @@ cutting-list.html                    Week's cut-to-order portions, wheel by whee
 cutting.html                         Weigh each cut piece, record waste (phone-first)
 picking.html                         Week's whole items product by product / lot by
                                      lot, with who each is for (by Storage)
+checklists.html                      Floor checklists on the phone: fill in, submit,
+                                     manager approves (PDF to Drive) or sends back
+checklist-setup.html                 Staff (who, managers' emails) and checklist items
 trace.html                           One lot: delivery, customers, weights, waste
 recall.html                          Recalls: find affected lots, hold them, contact
                                      list, mock-drill timing and printable report

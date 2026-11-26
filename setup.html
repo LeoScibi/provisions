@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=55">
+<link rel="stylesheet" href="css/style.css?v=56">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -38,7 +38,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=7"></script>
-<script src="js/shell.js?v=15"></script>
+<script src="js/shell.js?v=16"></script>
 <script>
   // Data model:
   //   Products   — the item master, keyed by the business's own product
@@ -222,6 +222,35 @@
       // of the customer's / order discount.
       title: 'LotDiscounts',
       headers: ['ID','PRODUCT CODE','BATCH/LOT NUMBER','DISCOUNT %','REASON','CREATED AT','CREATED BY','ENDED AT','ENDED BY']
+    },
+    {
+      // Who works here, for the checklists (checklists.html). Floor staff
+      // share the warehouse phone and pick their NAME when filling a list
+      // in; a Manager approves submitted lists signed in with their own
+      // Google account, matched on EMAIL. ROLE is Floor or Manager.
+      title: 'Staff',
+      headers: ['NAME','EMAIL','ROLE','ACTIVE','NOTES']
+    },
+    {
+      // What each floor checklist asks (js/checklists.js has the five lists
+      // and the standard items from the paper forms, loaded with one button).
+      // CHECKLIST is opening / closing / cleaning / goods-in / goods-out.
+      // TYPE: tick, temp (°C — over MAX °C is flagged and needs a note),
+      // number, text, or choice (OPTIONS comma-separated). DAYS limits an
+      // item to some weekdays (e.g. "Wed"; the cleaning schedule), blank =
+      // every day. Optional items have REQUIRED = No.
+      title: 'ChecklistItems',
+      headers: ['ID','CHECKLIST','ITEM','TYPE','OPTIONS','MAX °C','DAYS','REQUIRED','ORDER','ACTIVE']
+    },
+    {
+      // One filled-in checklist. REF is the PO for Goods In. STATUS:
+      // Submitted → Approved, or Sent back (with MANAGER NOTE) to fix and
+      // resubmit. Approving saves a PDF to Drive (PDF URL). ANSWERS is the
+      // list as filled in (JSON, item wording included, so editing the items
+      // later never changes an old record); FLAGS lists temperatures over the
+      // limit and items marked not done.
+      title: 'ChecklistRuns',
+      headers: ['ID','CHECKLIST','DATE','REF','STATUS','DONE BY','SUBMITTED AT','REVIEWED BY','REVIEWED AT','MANAGER NOTE','PDF URL','FLAGS','NOTES','ANSWERS']
     },
     {
       // Hauliers that bring goods in to Provisions, with contact details

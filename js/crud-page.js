@@ -28,6 +28,7 @@
 //     { key:'TIER', label:'Tier', type:'text', placeholder:'e.g. Standard' },
 //     { key:'ACTIVE', label:'Active', type:'checkbox' },        // stores TRUE/FALSE
 //     { key:'ACTIVE', label:'Active', type:'checkbox', trueValue:'Yes', falseValue:'No' }, // stores Yes/No instead
+//                                                               // default: true — ticked in a new row
 //     { key:'CATEGORY', label:'Category', type:'select', options:[...] },
 //     { key:'SUPPLIER', label:'Supplier', type:'ref', refTab:'Suppliers', refValue:'NAME' },
 //     { key:'COST', label:'Cost', type:'number', format:'currency' },
@@ -501,7 +502,7 @@ async function initCrudTable(config) {
   function resetFieldValues() {
     for (const f of fields) {
       const el = form.querySelector(`#${fid(f)}`);
-      if (f.type === 'checkbox') el.checked = false;
+      if (f.type === 'checkbox') el.checked = f.default === true;
       else if (f.type === 'date' && f.default === 'today') el.value = new Date().toISOString().slice(0, 10);
       else el.value = '';
       syncFileFieldLink(f);

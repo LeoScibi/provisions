@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=55">
+<link rel="stylesheet" href="css/style.css?v=56">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -59,11 +59,12 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=15"></script>
+<script src="js/shell.js?v=16"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
+<script src="js/checklists.js?v=1"></script>
 <script src="js/lists-data.js?v=6"></script>
 <script>
   const signInBtn = document.getElementById('signInBtn');
@@ -304,7 +305,7 @@
     };
   }
 
-  function renderAlerts(gi, stock, overdue, short, onHeld) {
+  function renderAlerts(gi, stock, overdue, short, onHeld, cl) {
     const chip = (n, text, href, kind) => n ? `<a class="alert-chip ${kind}" href="${href}"><i></i>${escapeHtml(text)}</a>` : '';
     const html = [
       chip(onHeld, `${plural(onHeld, 'order')} on a lot on hold`, 'recall.html', 'crit'),
@@ -313,12 +314,24 @@
       chip(gi.late.length, `${plural(gi.late.length, 'PO')} late`, 'purchase-orders.html', 'crit'),
       chip(short, `${plural(short, 'order')} short of stock`, 'orders.html', 'crit'),
       chip(stock.shortDated, `${plural(stock.shortDated, 'lot')} short-dated`, 'stock.html', 'yell'),
-      chip(stock.low, `${plural(stock.low, 'product')} low`, 'stock.html', 'plain')
+      chip(stock.low, `${plural(stock.low, 'product')} low`, 'stock.html', 'plain'),
+      chip(cl.sentBack.length, `${plural(cl.sentBack.length, 'checklist')} sent back`, 'checklists.html', 'crit'),
+      chip(cl.waiting.length, `${plural(cl.waiting.length, 'checklist')} to approve`, 'checklists.html', 'yell'),
+      ...clDue(cl).map(key => chip(1, `${checklistByKey(key).name} checks not done`, `checklists.html?list=${key}`, 'yell'))
     ].join('');
     document.getElementById('alerts').innerHTML = html || '<span class="alert-chip ok"><i></i>No stock alerts</span>';
   }
 
-  function renderPhoneTasks(run, gi) {
+  // Today's daily checklists worth nagging about: Opening and Cleaning all
+  // day, Closing from 3pm.
+  const clDue = cl => cl.todo.filter(key => key !== 'closing' || new Date().getHours() >= 15);
+  const CL_EMPTY = { waiting: [], sentBack: [], todo: [] };
+  async function loadChecklistSummary(spreadsheetId) {
+    const [items, runs] = await Promise.all([clLoadTab(spreadsheetId, 'ChecklistItems'), clLoadTab(spreadsheetId, 'ChecklistRuns')]);
+    return checklistTodaySummary(items.rows.map(r => r.obj).filter(i => i.ITEM), runs.rows.map(r => r.obj).filter(r => r.ID));
+  }
+
+  function renderPhoneTasks(run, gi, cl) {
     const tile = (href, title, sub, n, icon, big) => `
       <a class="task${big ? ' big' : ''}" href="${href}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>
@@ -333,6 +346,7 @@
       ${tile('receiving.html', 'Goods in', inCount ? `${plural(inCount, 'delivery', 'deliveries')} due` : 'None due', inCount, '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>')}
       ${tile(`picking.html${q}`, 'Pick', run && run.pick.length ? `${plural(run.pick.length, 'order')} ready` : 'Nothing to pick', run ? run.pick.length : 0, '<path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5l1 1 2-2M4.5 12l1 1 2-2M4.5 19l1 1 2-2"/>')}
       ${tile(`lists.html${q}`, 'Pack', run && run.pack.length ? `${plural(run.pack.length, 'order')} ready` : 'Nothing to pack', run ? run.pack.length : 0, '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>')}
+      ${tile('checklists.html', 'Checklists', cl.todo.length ? `${cl.todo.map(k => checklistByKey(k).name).join(', ')} to do` : cl.sentBack.length ? `${plural(cl.sentBack.length, 'list')} sent back` : 'All done today', cl.todo.length + cl.sentBack.length, '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M8.5 9.5l1.5 1.5 3-3M8.5 15.5l1.5 1.5 3-3M15 10h1.5M15 16h1.5"/>')}
       ${tile('stock-take.html', 'Stock take', 'Count the shelves', 0, '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>')}
       <button type="button" class="task-office" id="officeViewBtn">Show the full office view</button>`;
   }
@@ -348,7 +362,9 @@
     card.hidden = false;
     setStatus('');
     try {
+      const clP = loadChecklistSummary(cfg.spreadsheetId).catch(() => CL_EMPTY);
       data = await loadListsData(cfg.spreadsheetId, token);
+      const cl = await clP;
       const { first, second } = pickRuns();
       const run = first ? runOf(first) : null;
       const gi = goodsIn();
@@ -357,11 +373,11 @@
       const overdue = undispatched.filter(o => o['DELIVERY DATE'] && o['DELIVERY DATE'] < today).length;
       const short = undispatched.filter(o => packLines(o).some(l => l.short)).length;
       const onHeld = undispatched.filter(o => packLines(o).some(l => l.held)).length;
-      renderAlerts(gi, stockAlerts(), overdue, short, onHeld);
+      renderAlerts(gi, stockAlerts(), overdue, short, onHeld, cl);
       renderRunToday(run);
       renderRunNext(second ? runOf(second) : null);
       renderGoodsIn(gi);
-      renderPhoneTasks(run, gi);
+      renderPhoneTasks(run, gi, cl);
     } catch (err) {
       setStatus('Error loading: ' + err.message, 'error');
     }

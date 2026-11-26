@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=55">
+<link rel="stylesheet" href="css/style.css?v=56">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -29,7 +29,7 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=15"></script>
+<script src="js/shell.js?v=16"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
 <script src="js/supplier-products.js?v=1"></script>
@@ -483,7 +483,10 @@
         <div class="muted"><span class="code">${escapeHtml(poId)}</span>${already ? ' · nothing more was saved' : filled ? ` · ${filled} order allocation${filled === 1 ? '' : 's'} filled from it` : ''}</div>
         ${short?.length ? `<div class="cp-warn" style="margin-top:12px; text-align:left;">Not enough arrived for ${short.map(id => `<a href="orders.html?open=${encodeURIComponent(id)}" style="color:inherit; text-decoration:underline;">${escapeHtml(id)}</a>`).join(', ')}. Re-allocate or replace those lines.</div>` : ''}
       </section>
-      <div class="gi-bar"><button type="button" class="btn gi-next" data-back>Back to deliveries</button></div>`;
+      <div class="gi-bar">
+        ${already ? '' : `<a class="btn gi-next" href="checklists.html?list=goods-in&ref=${encodeURIComponent(poId)}">Do the Goods In checklist</a>`}
+        <button type="button" class="btn ${already ? '' : 'ghost '}gi-next" data-back>Back to deliveries</button>
+      </div>`;
   }
 
   function render() {

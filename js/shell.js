@@ -24,7 +24,8 @@
   // [href, label, icon, group?]
   const NAV = [
     { label: 'Today', pages: [
-      ['index.html', 'Today', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>']
+      ['index.html', 'Today', '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'],
+      ['checklists.html', 'Checklists', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M8.5 9.5l1.5 1.5 3-3M8.5 15.5l1.5 1.5 3-3M15 10h1.5M15 16h1.5"/>']
     ] },
     { label: 'Orders', pages: [
       ['orders.html', 'Orders', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/>'],

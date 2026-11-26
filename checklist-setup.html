@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Checklist setup</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=56">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+
+<header class="topbar no-print" id="topbar"></header>
+
+<main>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+    <h2 style="margin:0;">Checklist setup</h2>
+    <a class="btn ghost sm" href="checklists.html">‹ Checklists</a>
+  </div>
+  <p class="subtitle" style="margin:6px 0 14px; color:var(--steel); font-size:13.5px;">
+    Who fills the floor checklists in, and what each one asks. Floor staff pick their name on the warehouse phone; a Manager approves submitted lists signed in with their own Google account, so their Email must be the one they sign in with.
+  </p>
+
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+
+  <div id="staffMount"></div>
+
+  <h2 style="margin-top:34px;">Checks</h2>
+  <p class="subtitle" style="margin:-4px 0 14px; color:var(--steel); font-size:13.5px;">
+    One row per check. Temperatures over their Max °C are flagged and need a note. Days limits a check to some weekdays (e.g. "Wed" or "Tue, Thu" — the cleaning schedule); blank is every day. Editing a check never changes lists already filled in.
+  </p>
+  <div id="itemsMount"></div>
+</main>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=16"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/dialog-guard.js?v=1"></script>
+<script src="js/searchable-select.js?v=2"></script>
+<script src="js/crud-page.js?v=23"></script>
+<script src="js/drive.js?v=3"></script>
+<script src="js/checklists.js?v=1"></script>
+<script>
+  // The Staff and ChecklistItems tabs (see js/checklists.js).
+  function requireAuth() {
+    const ok = !!(tryResumeSession() && getStoredConfig().spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+
+  window.addEventListener('load', () => {
+    if (!requireAuth()) return;
+    initCrudTable({
+      mount: '#staffMount',
+      title: 'Staff',
+      subtitle: 'Everyone who fills in or approves a checklist.',
+      tab: 'Staff',
+      headers: ['NAME','EMAIL','ROLE','ACTIVE','NOTES'],
+      autoId: null,
+      fields: [
+        { key: 'NAME', label: 'Name', type: 'text', required: true, primary: true },
+        { key: 'EMAIL', label: 'Google email (managers)', type: 'text', placeholder: 'name@example.com' },
+        { key: 'ROLE', label: 'Role', type: 'select', options: ['Floor', 'Manager'], required: true },
+        { key: 'ACTIVE', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No', default: true },
+        { key: 'NOTES', label: 'Notes', type: 'textarea' }
+      ]
+    });
+
+    initCrudTable({
+      mount: '#itemsMount',
+      title: 'Checks',
+      subtitle: 'What each checklist asks, in order.',
+      tab: 'ChecklistItems',
+      headers: ['ID','CHECKLIST','ITEM','TYPE','OPTIONS','MAX °C','DAYS','REQUIRED','ORDER','ACTIVE'],
+      autoId: 'CI',
+      fields: [
+        { key: 'CHECKLIST', label: 'Checklist', type: 'select', options: CHECKLISTS.map(c => c.key), required: true,
+          display: v => escapeHtml(checklistByKey(v)?.name || v) },
+        { key: 'ITEM', label: 'Check', type: 'text', required: true, primary: true },
+        { key: 'TYPE', label: 'Type (tick, temp, number, text, choice)', type: 'select', options: ['tick', 'temp', 'number', 'text', 'choice'], required: true },
+        { key: 'OPTIONS', label: 'Options (choice only, comma-separated)', type: 'text', placeholder: 'e.g. Same day, Next day' },
+        { key: 'MAX °C', label: 'Max °C (temp only)', type: 'number' },
+        { key: 'DAYS', label: 'Days (blank = every day)', type: 'text', placeholder: 'e.g. Wed' },
+        { key: 'REQUIRED', label: 'Required', type: 'checkbox', trueValue: 'Yes', falseValue: 'No', default: true },
+        { key: 'ORDER', label: 'Order', type: 'number' },
+        { key: 'ACTIVE', label: 'Active', type: 'checkbox', trueValue: 'Yes', falseValue: 'No', default: true }
+      ]
+    });
+  });
+</script>
+</body>
+</html>

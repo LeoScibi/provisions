@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Checklists</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=56">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<main class="cl-main">
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+  <div id="out"></div>
+  <div id="status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+</main>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=16"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/drive.js?v=3"></script>
+<script src="js/lot-holds.js?v=1"></script>
+<script src="js/checklists.js?v=1"></script>
+<script>
+  // The floor checklists on the warehouse phone (see js/checklists.js).
+  // Home: pick your name and the day, then a tile per list with how far it
+  // got. Filling a list in: one card per check, kept on the phone as a draft
+  // until it's submitted. A submitted list opened by a Manager (their own
+  // Google login, on Staff) can be approved — which saves it as a PDF in
+  // Drive — or sent back with a note.
+  // ?list=goods-in&ref=PO123 starts a list straight away (Goods In's link);
+  // ?run=CR001 opens one record; ?date=YYYY-MM-DD picks the day.
+  const NAME_KEY = 'provisions_checklistName';
+  const params = new URLSearchParams(location.search);
+  let data = null;          // { staff, items, runs, runRows, pos, orders, tabsOk }
+  let date = params.get('date') || clToday();
+  let fill = null;          // the list being filled in: { list, date, ref, run, answers, notes }
+  const out = document.getElementById('out');
+  const esc = escapeHtml;
+
+  function setStatus(msg, kind) {
+    const el = document.getElementById('status');
+    el.textContent = msg || '';
+    el.style.color = kind === 'error' ? 'var(--crit)' : kind === 'ok' ? 'var(--ok)' : 'var(--steel)';
+  }
+  function requireAuth() {
+    const ok = !!(tryResumeSession() && getStoredConfig().spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+  const sid = () => getStoredConfig().spreadsheetId;
+  const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  const fmtShort = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); const p = x => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const myName = () => { try { return localStorage.getItem(NAME_KEY) || ''; } catch (e) { return ''; } };
+  const setMyName = n => { try { localStorage.setItem(NAME_KEY, n); } catch (e) {} };
+  const manager = () => checklistManager(data.staff);
+  const statusTag = run => {
+    if (!run) return '<span class="tag t-amb">To do</span>';
+    const cls = { Submitted: 't-warn', Approved: 't-ok', 'Sent back': 't-crit' }[run.STATUS] || 't-amb';
+    return `<span class="tag ${cls}">${esc(run.STATUS === 'Submitted' ? 'Awaiting approval' : run.STATUS)}</span>`;
+  };
+
+  // ---- loading ----
+
+  async function loadAll() {
+    if (!requireAuth()) return;
+    setStatus('Loading...');
+    try {
+      const [staff, items, runs, pos, orders] = await Promise.all(
+        ['Staff', 'ChecklistItems', 'ChecklistRuns', 'PurchaseOrders', 'Orders'].map(t => clLoadTab(sid(), t)));
+      data = {
+        staff: staff.rows.map(r => r.obj).filter(s => s.NAME && (s.ACTIVE || 'Yes') !== 'No'),
+        items: items.rows.map(r => r.obj).filter(i => i.ITEM),
+        runRows: runs.rows.filter(r => r.obj.ID),
+        runs: runs.rows.map(r => r.obj).filter(r => r.ID),
+        pos: pos.rows.map(r => r.obj),
+        orders: orders.rows.map(r => r.obj),
+        tabsOk: staff.exists && items.exists && runs.exists
+      };
+      setStatus('');
+      route();
+    } catch (err) {
+      setStatus('Error loading: ' + err.message, 'error');
+    }
+  }
+
+  function route() {
+    const runId = params.get('run');
+    const key = params.get('list');
+    if (runId) {
+      const run = data.runs.find(r => r.ID === runId);
+      if (run) return renderRun(run);
+      setStatus(`${runId} isn't in the sheet.`, 'error');
+    } else if (key && checklistByKey(key)) {
+      return startFill(key, date, params.get('ref') || '');
+    }
+    renderHome();
+  }
+
+  // ---- home ----
+
+  function renderHome() {
+    fill = null;
+    history.replaceState(null, '', `checklists.html${date !== clToday() ? `?date=${date}` : ''}`);
+    if (!data.tabsOk) {
+      out.innerHTML = `<h2>Checklists</h2><div class="note">The checklist tabs aren't in the sheet yet — run <a href="setup.html" style="color:inherit;text-decoration:underline;">Setup</a> first.</div>`;
+      return;
+    }
+    const mgr = manager();
+    const name = myName();
+    const staffNames = data.staff.map(s => s.NAME);
+    const nameCtl = staffNames.length
+      ? `<select id="clName" class="cl-name"><option value="">Choose your name…</option>${staffNames.map(n => `<option${n === name ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`
+      : `<input id="clName" class="cl-name" placeholder="Your name" value="${esc(name)}">`;
+
+    const tile = key => {
+      const list = checklistByKey(key);
+      const n = checklistItemsFor(data.items, key, date).length;
+      const run = checklistRunFor(data.runs, key, date);
+      if (!n) return `<div class="cl-tile off"><b>${esc(list.name)}</b><span>Nothing on ${esc(clWeekday(date))}s</span></div>`;
+      return `<button type="button" class="cl-tile" data-open="${key}"><b>${esc(list.name)}</b><span>${n} check${n === 1 ? '' : 's'}${run ? ` · ${esc(run['DONE BY'])}` : ''}</span>${statusTag(run)}</button>`;
+    };
+
+    // Goods In: one per delivery. Offer the POs due around this day that
+    // don't have a record yet; show those that do.
+    const giRuns = data.runs.filter(r => r.CHECKLIST === 'goods-in' && clIso(r.DATE) === date);
+    const doneRefs = new Set(data.runs.filter(r => r.CHECKLIST === 'goods-in').map(r => r.REF));
+    const duePos = data.pos.filter(p => p.ID && p.STATUS !== 'Cancelled' && !doneRefs.has(p.ID) &&
+      clIso(p['EXPECTED START DATE'] || p['ORDER DATE']) <= addDays(date, 1) && clIso(p['EXPECTED END DATE'] || p['EXPECTED START DATE']) >= addDays(date, -3));
+
+    const waiting = mgr ? data.runs.filter(r => r.STATUS === 'Submitted') : [];
+    const sentBack = data.runs.filter(r => r.STATUS === 'Sent back');
+    const recent = data.runs.slice().sort((a, b) => (b['SUBMITTED AT'] || '').localeCompare(a['SUBMITTED AT'] || '')).slice(0, 15);
+    const runRow = r => `<a class="cl-row" href="?run=${encodeURIComponent(r.ID)}">
+        <span><b>${esc(checklistByKey(r.CHECKLIST)?.name || r.CHECKLIST)}</b>${r.REF ? ` <span class="code">${esc(r.REF)}</span>` : ''} · ${esc(fmtShort(clIso(r.DATE)))}<br><span class="muted">${esc(r['DONE BY'])}${r.FLAGS ? ` · <span class="neg">${esc(r.FLAGS.split('\n').length)} flagged</span>` : ''}</span></span>
+        ${statusTag(r)}</a>`;
+
+    out.innerHTML = `
+      <div class="cl-head">
+        <h2>Checklists</h2>
+        <a class="btn ghost sm" href="checklist-setup.html">Staff &amp; items</a>
+      </div>
+      ${!data.items.length ? `<div class="note info" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <span>No checks set up yet. Load the five lists from the paper forms (Opening, Closing, Cleaning, Goods In, Goods Out) — you can edit them after.</span>
+          <button type="button" class="btn sm" id="clSeed">Load the standard checklists</button></div>` : ''}
+      ${!data.staff.length ? `<div class="note">Add your team on <a href="checklist-setup.html" style="color:inherit;text-decoration:underline;">Staff &amp; items</a> so people can pick their name, and mark managers (with their Google email) so they can approve.</div>` : ''}
+      <div class="cl-who">
+        <label>Who's filling in?${nameCtl}</label>
+        <div class="cl-day">
+          <button type="button" class="btn ghost sm" id="clPrev" aria-label="Previous day">‹</button>
+          <span>${esc(fmtDay(date))}${date === clToday() ? ' <span class="tag t-ok">Today</span>' : ''}</span>
+          <button type="button" class="btn ghost sm" id="clNext" aria-label="Next day"${date >= clToday() ? ' disabled' : ''}>›</button>
+        </div>
+      </div>
+      ${waiting.length ? `<div class="panel"><div class="panel-h"><h3>Waiting for your approval</h3><span class="tag t-warn">${waiting.length}</span></div><div class="cl-rows">${waiting.map(runRow).join('')}</div></div>` : ''}
+      ${sentBack.length ? `<div class="panel"><div class="panel-h"><h3>Sent back to fix</h3></div><div class="cl-rows">${sentBack.map(runRow).join('')}</div></div>` : ''}
+      <div class="cl-tiles">${['opening', 'closing', 'cleaning', 'goods-out'].map(tile).join('')}</div>
+      <div class="panel">
+        <div class="panel-h"><h3>Goods In</h3><span class="muted">one per delivery</span></div>
+        <div class="cl-rows">
+          ${giRuns.map(runRow).join('')}
+          ${duePos.map(p => `<button type="button" class="cl-row" data-gi="${esc(p.ID)}"><span><b>${esc(p.SUPPLIER)}</b> <span class="code">${esc(p.ID)}</span><br><span class="muted">${p.STATUS === 'Delivered' ? 'Delivered' : `Due ${esc(fmtShort(clIso(p['EXPECTED START DATE'])))}`}</span></span><span class="tag t-amb">To do</span></button>`).join('')}
+          <button type="button" class="cl-row" data-gi=""><span><b>Another delivery</b><br><span class="muted">Not on a purchase order</span></span><span class="cl-plus">+</span></button>
+        </div>
+      </div>
+      ${recent.length ? `<div class="panel"><div class="panel-h"><h3>Recent</h3></div><div class="cl-rows">${recent.map(runRow).join('')}</div></div>` : ''}`;
+
+    const nameEl = document.getElementById('clName');
+    nameEl.onchange = nameEl.oninput = () => setMyName(nameEl.value.trim());
+    document.getElementById('clPrev').onclick = () => { date = addDays(date, -1); renderHome(); };
+    document.getElementById('clNext').onclick = () => { date = addDays(date, 1); renderHome(); };
+    out.querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
+      const run = checklistRunFor(data.runs, b.dataset.open, date);
+      if (run) renderRun(run); else startFill(b.dataset.open, date, '');
+    });
+    out.querySelectorAll('[data-gi]').forEach(b => b.onclick = () => startFill('goods-in', date, b.dataset.gi));
+    const seed = document.getElementById('clSeed');
+    if (seed) seed.onclick = seedItems;
+  }
+
+  async function seedItems() {
+    setStatus('Adding the standard checks...');
+    try {
+      const rows = checklistDefaultRows([]);
+      await sheetsAppendRows(sid(), 'ChecklistItems!A:J', rows);
+      showToast(`Added ${rows.length} checks`);
+      await loadAll();
+    } catch (err) { setStatus('Could not add them: ' + err.message, 'error'); }
+  }
+
+  // ---- filling a list in ----
+
+  const draftKey = (key, d, ref) => `provisions_checklist_${key}_${d}_${ref}`;
+  function saveDraft() {
+    try { localStorage.setItem(draftKey(fill.list.key, fill.date, fill.ref), JSON.stringify({ answers: fill.answers, notes: fill.notes })); } catch (e) {}
+  }
+  function clearDraft() { try { localStorage.removeItem(draftKey(fill.list.key, fill.date, fill.ref)); } catch (e) {} }
+
+  // `run`: a Sent back record being fixed (its answers are the start).
+  function startFill(key, d, ref, run = null) {
+    const list = checklistByKey(key);
+    const existing = run || (key === 'goods-in' && ref ? data.runs.find(r => r.CHECKLIST === key && r.REF === ref) : key !== 'goods-in' ? checklistRunFor(data.runs, key, d) : null);
+    if (existing && !run && existing.STATUS !== 'Sent back') return renderRun(existing);
+    const items = checklistItemsFor(data.items, key, d);
+    const fromRun = existing ? parseRunAnswers(existing) : [];
+    let answers = items.map(i => {
+      const prev = fromRun.find(a => a.item === i.ITEM);
+      return { item: i.ITEM, type: i.TYPE || 'tick', options: i.OPTIONS || '', max: i['MAX °C'] === '' ? '' : parseFloat(i['MAX °C']), required: (i.REQUIRED || 'Yes') !== 'No', value: prev ? prev.value : '', note: prev ? prev.note : '' };
+    });
+    // Anything the sent-back record had that's no longer an item stays on it.
+    fromRun.filter(a => !answers.some(x => x.item === a.item)).forEach(a => answers.push({ ...a }));
+    let notes = existing ? existing.NOTES || '' : '';
+    let draft = null;
+    try { draft = JSON.parse(localStorage.getItem(draftKey(key, d, ref)) || 'null'); } catch (e) {}
+    if (draft && Array.isArray(draft.answers)) {
+      answers.forEach(a => { const p = draft.answers.find(x => x.item === a.item); if (p) { a.value = p.value; a.note = p.note; } });
+      notes = draft.notes || notes;
+    } else if (!existing) {
+      prefill(key, d, ref, answers);
+    }
+    fill = { list, date: d, ref, run: existing, answers, notes };
+    history.replaceState(null, '', `checklists.html?list=${key}&date=${d}${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`);
+    renderFill();
+  }
+
+  // What the sheet already knows: the PO's supplier, the day's drops.
+  function prefill(key, d, ref, answers) {
+    const set = (re, v) => { const a = answers.find(x => re.test(x.item)); if (a && v !== '' && v != null) a.value = String(v); };
+    if (key === 'goods-in' && ref) set(/^supplier/i, data.pos.find(p => p.ID === ref)?.SUPPLIER);
+    if (key === 'goods-out') {
+      const drops = new Set(data.orders.filter(o => clIso(o['DELIVERY DATE']) === d && o.STATUS !== 'Cancelled').map(o => o.CUSTOMER));
+      if (drops.size) set(/number of drops/i, drops.size);
+    }
+  }
+
+  const answerFlag = a => (a.type === 'temp' && a.value !== '' && a.max !== '' && !isNaN(a.max) && parseFloat(a.value) > a.max) || (a.type === 'tick' && a.value === 'No');
+  const answered = a => a.value !== '' && a.value != null;
+
+  function renderFill() {
+    const { list, answers } = fill;
+    const card = (a, i) => {
+      const flag = answerFlag(a);
+      let ctl = '';
+      if (a.type === 'tick') {
+        ctl = `<div class="cl-yn"><button type="button" class="cl-y${a.value === 'Yes' ? ' on' : ''}" data-i="${i}" data-v="Yes">✓ Done</button><button type="button" class="cl-n${a.value === 'No' ? ' on' : ''}" data-i="${i}" data-v="No">✗ Not done</button></div>`;
+      } else if (a.type === 'choice') {
+        ctl = `<div class="cl-yn">${a.options.split(',').map(o => o.trim()).filter(Boolean).map(o => `<button type="button" class="cl-c${a.value === o ? ' on' : ''}" data-i="${i}" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+      } else if (a.type === 'temp') {
+        ctl = `<div class="cl-temp"><input type="text" inputmode="decimal" data-i="${i}" data-f="value" value="${esc(a.value)}" placeholder="0.0"><span>°C</span>${a.max !== '' && !isNaN(a.max) ? `<small>max ${a.max}°C</small>` : ''}</div>`;
+      } else {
+        ctl = `<input type="${a.type === 'number' ? 'number' : 'text'}" class="cl-text" ${a.type === 'number' ? 'inputmode="numeric"' : ''} data-i="${i}" data-f="value" value="${esc(a.value)}">`;
+      }
+      const why = flag ? (a.type === 'temp' ? `Over ${a.max}°C — tell the manager and note what you did.` : 'Not done — say why.') : '';
+      return `<div class="cl-card${flag ? ' flag' : ''}${answered(a) && !flag ? ' done' : ''}" id="clc${i}">
+        <div class="cl-q">${esc(a.item)}${a.required ? '' : ' <span class="muted">(optional)</span>'}</div>
+        ${ctl}
+        ${why ? `<div class="cl-why">${esc(why)}</div>` : ''}
+        <input type="text" class="cl-note${flag || a.note ? ' show' : ''}" data-i="${i}" data-f="note" value="${esc(a.note)}" placeholder="${flag ? 'What happened / what you did' : 'Note (optional)'}">
+        ${!flag && !a.note ? `<button type="button" class="cl-addnote" data-note="${i}">+ Note</button>` : ''}
+      </div>`;
+    };
+    const left = answers.filter(a => a.required && !answered(a)).length;
+    out.innerHTML = `
+      <div class="cl-head"><button type="button" class="btn ghost sm" id="clBack">‹ Checklists</button></div>
+      <h2 style="margin-bottom:2px;">${esc(list.title)}</h2>
+      <p class="muted" style="margin:0 0 6px;">${esc(fmtDay(fill.date))}${fill.ref ? ` · <span class="code">${esc(fill.ref)}</span>` : ''}</p>
+      <p class="cl-intro">${esc(list.intro)}</p>
+      ${fill.run && fill.run.STATUS === 'Sent back' ? `<div class="note"><b>Sent back by ${esc(fill.run['REVIEWED BY'])}:</b> ${esc(fill.run['MANAGER NOTE'] || 'no note')}</div>` : ''}
+      ${!answers.length ? `<div class="note">No checks for this list${list.key === 'cleaning' ? ` on ${esc(clWeekday(fill.date))}s` : ''} — add them on <a href="checklist-setup.html" style="color:inherit;text-decoration:underline;">Staff &amp; items</a>.</div>` : ''}
+      <div class="cl-cards">${answers.map(card).join('')}</div>
+      <label class="cl-notes">Anything else?<textarea id="clNotes" rows="2">${esc(fill.notes)}</textarea></label>
+      <div class="cl-submit">
+        <span class="muted" id="clLeft">${left ? `${left} to go` : 'All done'}</span>
+        <button type="button" class="btn" id="clSubmit"${answers.length ? '' : ' disabled'}>${fill.run ? 'Resubmit' : 'Submit'} for approval</button>
+      </div>`;
+
+    document.getElementById('clBack').onclick = () => renderHome();
+    out.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+      const a = answers[b.dataset.i];
+      a.value = a.value === b.dataset.v ? '' : b.dataset.v;
+      saveDraft(); rerenderKeepingScroll();
+    });
+    out.querySelectorAll('input[data-f]').forEach(inp => {
+      inp.oninput = () => { const a = answers[inp.dataset.i]; a[inp.dataset.f] = inp.dataset.f === 'value' && a.type === 'temp' ? inp.value.replace(',', '.') : inp.value; saveDraft(); updateLeft(); };
+      if (inp.dataset.f === 'value') inp.onchange = () => rerenderKeepingScroll();
+    });
+    out.querySelectorAll('[data-note]').forEach(b => b.onclick = () => {
+      const n = document.querySelector(`#clc${b.dataset.note} .cl-note`);
+      n.classList.add('show'); b.remove(); n.focus();
+    });
+    document.getElementById('clNotes').oninput = e => { fill.notes = e.target.value; saveDraft(); };
+    document.getElementById('clSubmit').onclick = submitFill;
+  }
+  function updateLeft() {
+    const left = fill.answers.filter(a => a.required && !answered(a)).length;
+    const el = document.getElementById('clLeft');
+    if (el) el.textContent = left ? `${left} to go` : 'All done';
+  }
+  function rerenderKeepingScroll() {
+    const y = window.scrollY;
+    renderFill();
+    window.scrollTo(0, y);
+  }
+
+  async function submitFill() {
+    const name = myName() || (manager() && manager().NAME) || '';
+    if (!name) { renderHome(); setStatus('Choose your name first.', 'error'); document.getElementById('clName')?.focus(); return; }
+    const missing = fill.answers.findIndex(a => a.required && !answered(a));
+    if (missing >= 0) return nudge(missing, 'Answer this one first.');
+    const bad = fill.answers.findIndex(a => a.type === 'temp' && answered(a) && isNaN(parseFloat(a.value)));
+    if (bad >= 0) return nudge(bad, 'That isn\'t a temperature.');
+    const unexplained = fill.answers.findIndex(a => answerFlag(a) && !(a.note || '').trim());
+    if (unexplained >= 0) return nudge(unexplained, 'Add a note saying what happened.');
+
+    const answers = fill.answers.map(a => ({ item: a.item, type: a.type, value: a.type === 'temp' && answered(a) ? String(parseFloat(a.value)) : a.value, note: (a.note || '').trim(), max: a.max, flag: answerFlag(a) }));
+    const btn = document.getElementById('clSubmit');
+    btn.disabled = true;
+    setStatus('Saving...');
+    try {
+      // Fresh read, so two phones can't both take the next ID or both
+      // record the same day's list.
+      const runs = await clLoadTab(sid(), 'ChecklistRuns');
+      const rows = runs.rows.filter(r => r.obj.ID);
+      const mine = fill.run ? rows.find(r => r.obj.ID === fill.run.ID) : null;
+      if (!fill.run) {
+        const clash = rows.find(r => r.obj.CHECKLIST === fill.list.key && clIso(r.obj.DATE) === fill.date && (r.obj.REF || '') === fill.ref && r.obj.STATUS !== 'Sent back');
+        if (clash && (fill.list.key !== 'goods-in' || fill.ref)) throw new Error(`${clash.obj['DONE BY'] || 'Someone'} has already submitted this list (${clash.obj.ID}).`);
+      } else if (!mine) throw new Error(`${fill.run.ID} isn't in the sheet any more.`);
+      else if (mine.obj.STATUS === 'Approved') throw new Error(`${fill.run.ID} has already been approved.`);
+      const id = mine ? mine.obj.ID : nextId([['ID'], ...rows.map(r => [r.obj.ID])], 'CR');
+      const row = [id, fill.list.key, fill.date, fill.ref, 'Submitted', name, localStamp(), '', '', mine ? mine.obj['MANAGER NOTE'] : '', '', checklistFlags(answers).join('\n'), fill.notes.trim(), JSON.stringify(answers)];
+      if (mine) await sheetsUpdateRange(sid(), `ChecklistRuns!A${mine.rowNumber}:N${mine.rowNumber}`, [row]);
+      else await sheetsAppendRows(sid(), 'ChecklistRuns!A:N', [row]);
+      clearDraft();
+      showToast(`${fill.list.name} submitted${answers.some(a => a.flag) ? ' — flagged for the manager' : ''}`);
+      fill = null;
+      await loadAll();
+      const run = data.runs.find(r => r.ID === id);
+      if (run) renderRun(run);
+    } catch (err) {
+      btn.disabled = false;
+      setStatus('Not saved: ' + err.message, 'error');
+    }
+  }
+  function nudge(i, msg) {
+    const el = document.getElementById(`clc${i}`);
+    el.classList.add('nudge');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setStatus(msg, 'error');
+    showToast(msg, 'error');
+    setTimeout(() => el.classList.remove('nudge'), 1600);
+  }
+
+  // ---- one record, and approving it ----
+
+  function renderRun(run) {
+    fill = null;
+    history.replaceState(null, '', `checklists.html?run=${encodeURIComponent(run.ID)}`);
+    const list = checklistByKey(run.CHECKLIST) || { name: run.CHECKLIST, title: run.CHECKLIST, intro: '' };
+    const answers = parseRunAnswers(run);
+    const mgr = manager();
+    const shown = a => a.type === 'tick' ? (a.value === 'Yes' ? '✓ Done' : a.value === 'No' ? '✗ Not done' : '—') : a.type === 'temp' && a.value !== '' ? `${a.value}°C` : (a.value || '—');
+    out.innerHTML = `
+      <div class="cl-head"><button type="button" class="btn ghost sm" id="clBack">‹ Checklists</button>${statusTag(run)}</div>
+      <h2 style="margin-bottom:2px;">${esc(list.title)}</h2>
+      <p class="muted" style="margin:0 0 14px;">${esc(fmtDay(clIso(run.DATE)))}${run.REF ? ` · <span class="code">${esc(run.REF)}</span>` : ''} · <span class="code">${esc(run.ID)}</span></p>
+      <div class="panel"><div class="cl-rows">
+        ${answers.map(a => `<div class="cl-ans${a.flag ? ' flag' : ''}"><span>${esc(a.item)}${a.note ? `<br><span class="muted">${esc(a.note)}</span>` : ''}</span><b>${esc(shown(a))}</b></div>`).join('')}
+      </div></div>
+      ${run.NOTES ? `<p><b>Notes:</b> ${esc(run.NOTES)}</p>` : ''}
+      <p class="muted">Completed by <b>${esc(run['DONE BY'])}</b> · ${esc(run['SUBMITTED AT'])}${run['REVIEWED BY'] ? `<br>${run.STATUS === 'Approved' ? 'Approved' : 'Reviewed'} by <b>${esc(run['REVIEWED BY'])}</b> · ${esc(run['REVIEWED AT'])}` : ''}</p>
+      ${run['MANAGER NOTE'] ? `<div class="note"><b>Manager:</b> ${esc(run['MANAGER NOTE'])}</div>` : ''}
+      ${run['PDF URL'] ? `<p><a class="btn ghost sm" href="${esc(run['PDF URL'])}" target="_blank" rel="noopener">Open the PDF</a></p>` : ''}
+      ${run.STATUS === 'Submitted' && mgr ? `
+        <div class="panel"><div class="panel-b">
+          <label class="cl-notes" style="margin:0 0 12px;">Note (needed to send back)<textarea id="clMgrNote" rows="2"></textarea></label>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button type="button" class="btn" id="clApprove">Approve &amp; save PDF</button>
+            <button type="button" class="btn ghost" id="clSendBack">Send back</button>
+          </div>
+        </div></div>` : ''}
+      ${run.STATUS === 'Submitted' && !mgr ? `<p class="muted">Waiting for a manager to approve it — they open it signed in with their own Google account.</p>` : ''}
+      ${run.STATUS === 'Sent back' ? `<button type="button" class="btn" id="clFix">Fix and resubmit</button>` : ''}
+      ${run.STATUS === 'Approved' && !run['PDF URL'] && mgr ? `<button type="button" class="btn ghost" id="clRepdf">Save the PDF</button>` : ''}`;
+
+    document.getElementById('clBack').onclick = () => { date = clIso(run.DATE) || date; renderHome(); };
+    const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+    on('clApprove', () => review(run, 'Approved'));
+    on('clSendBack', () => review(run, 'Sent back'));
+    on('clRepdf', () => review(run, 'Approved', true));
+    on('clFix', () => startFill(run.CHECKLIST, clIso(run.DATE), run.REF || '', run));
+  }
+
+  // Approve: the PDF goes to Drive first, so an approved record always has
+  // one; then STATUS / REVIEWED BY / AT / MANAGER NOTE / PDF URL (E, H–K).
+  async function review(run, status, pdfOnly = false) {
+    const mgr = manager();
+    const note = (document.getElementById('clMgrNote')?.value || '').trim();
+    if (status === 'Sent back' && !note) { setStatus('Say what needs fixing in the note.', 'error'); document.getElementById('clMgrNote').focus(); return; }
+    out.querySelectorAll('.btn').forEach(b => b.disabled = true);
+    setStatus(status === 'Approved' ? 'Saving the PDF to Drive...' : 'Sending back...');
+    try {
+      const fresh = (await clLoadTab(sid(), 'ChecklistRuns')).rows.find(r => r.obj.ID === run.ID);
+      if (!fresh) throw new Error(`${run.ID} isn't in the sheet any more.`);
+      if (!pdfOnly && fresh.obj.STATUS !== 'Submitted') throw new Error(`${run.ID} is now ${fresh.obj.STATUS.toLowerCase()} — reload.`);
+      const by = mgr.NAME, at = pdfOnly ? fresh.obj['REVIEWED AT'] : localStamp();
+      const managerNote = pdfOnly ? fresh.obj['MANAGER NOTE'] : note;
+      let pdf = '';
+      if (status === 'Approved') {
+        const rec = { ...fresh.obj, 'REVIEWED BY': pdfOnly ? fresh.obj['REVIEWED BY'] : by, 'REVIEWED AT': at, 'MANAGER NOTE': managerNote };
+        const list = checklistByKey(run.CHECKLIST) || { name: run.CHECKLIST, title: run.CHECKLIST, intro: '' };
+        const name = `${clIso(run.DATE)} ${list.name}${run.REF ? ' ' + run.REF : ''} (${run.ID})`;
+        pdf = await saveChecklistPdf(name, checklistRecordHtml(rec, list, parseRunAnswers(fresh.obj)));
+      }
+      const r = fresh.rowNumber;
+      const writes = pdfOnly
+        ? [{ range: `ChecklistRuns!K${r}`, values: [[pdf]] }]
+        : [{ range: `ChecklistRuns!E${r}`, values: [[status]] }, { range: `ChecklistRuns!H${r}:K${r}`, values: [[by, at, managerNote, pdf]] }];
+      await sheetsBatchUpdateValues(sid(), writes);
+      showToast(status === 'Approved' ? 'Approved — PDF saved to Drive' : 'Sent back');
+      await loadAll();
+      const again = data.runs.find(x => x.ID === run.ID);
+      if (again) renderRun(again);
+    } catch (err) {
+      out.querySelectorAll('.btn').forEach(b => b.disabled = false);
+      setStatus((status === 'Approved' ? 'Not approved: ' : 'Not sent back: ') + err.message, 'error');
+    }
+  }
+
+  window.addEventListener('load', loadAll);
+</script>
+</body>
+</html>
