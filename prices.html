@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provisions — Prices</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=52">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<meta name="theme-color" content="#2C3A57">
+</head>
+<body>
+
+<header class="topbar no-print" id="topbar"></header>
+
+<main>
+  <h2>Prices</h2>
+  <p class="subtitle" style="margin:-4px 0 14px; color:var(--steel); font-size:13.5px;">
+    Special selling prices by price list or customer. A customer with no price here pays the product's List price £.
+    Prices are per kg or per piece (by the SKU's pricing basis), ex VAT and before the customer's discount, and cover every SKU of the product, portions included.
+  </p>
+
+  <div id="signedOutNotice" class="note" style="display:none;">
+    Not signed in — go to the <a href="index.html" style="color:inherit; text-decoration:underline;">Dashboard</a> to sign in. Your session will carry over here.
+  </div>
+
+  <div id="groupNote"></div>
+  <div id="pricesMount"></div>
+</main>
+
+<script src="js/config.js?v=5"></script>
+<script src="js/sheets.js?v=6"></script>
+<script src="js/shell.js?v=14"></script>
+<script src="js/util.js?v=3"></script>
+<script src="js/product-ui.js?v=5"></script>
+<script src="js/pricing.js?v=1"></script>
+<script src="js/dialog-guard.js?v=1"></script>
+<script src="js/searchable-select.js?v=2"></script>
+<script src="js/crud-page.js?v=22"></script>
+<script>
+  // The Prices tab (see js/pricing.js for how a line's price is chosen):
+  // one row per product + price list, or + one customer for a price only
+  // they get. ?group=<ProductGroups ID> (the "Edit prices" link on a
+  // product) narrows the list to that product and offers to add one.
+  function requireAuth() {
+    const cfg = getStoredConfig();
+    const token = tryResumeSession();
+    const ok = !!(token && cfg.spreadsheetId);
+    document.getElementById('signedOutNotice').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+
+  window.addEventListener('load', async () => {
+    if (!requireAuth()) return;
+    const groups = await loadProductGroups(getStoredConfig().spreadsheetId);
+    const groupName = Object.fromEntries(groups.map(g => [g.ID, g['Product name']]));
+    const focus = new URLSearchParams(location.search).get('group') || '';
+
+    const table = initCrudTable({
+      mount: '#pricesMount',
+      title: 'Prices',
+      subtitle: 'A price for one product on one price list, or for one customer.',
+      tab: 'Prices',
+      headers: ['ID','PRICE LIST','GROUP ID','CUSTOMER','PRICE £','VALID FROM','VALID TO','NOTES'],
+      autoId: 'PR',
+      fields: [
+        { key: 'PRICE LIST', label: 'Price list', type: 'select', options: PRICE_LISTS, required: true },
+        { key: 'GROUP ID', label: 'Product', type: 'ref', refTab: 'ProductGroups', refValue: 'ID', refLabel: 'Product name', required: true, primary: true,
+          display: v => v ? `${escapeHtml(groupName[v] || v)} <span class="code">${escapeHtml(v)}</span>` : '' },
+        { key: 'CUSTOMER', label: 'Customer (only for a price just they get)', type: 'ref', refTab: 'Customers', refValue: 'Customer name (as in Xero)' },
+        { key: 'PRICE £', label: 'Price £ (per kg or each, ex VAT)', type: 'number', format: 'currency', required: true },
+        { key: 'VALID FROM', label: 'Valid from', type: 'date' },
+        { key: 'VALID TO', label: 'Valid to', type: 'date' },
+        { key: 'NOTES', label: 'Notes', type: 'textarea' }
+      ],
+      onLoad: (rows, get) => {
+        if (!focus) return;
+        const n = rows.filter(r => get(r.values, 'GROUP ID') === focus).length;
+        document.getElementById('groupNote').innerHTML = `
+          <div class="note info" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span><strong>${escapeHtml(groupName[focus] || focus)}</strong> — ${n} price${n === 1 ? '' : 's'} below.</span>
+            <button type="button" class="btn sm" id="addForGroup">+ Add a price for it</button>
+            <a class="btn ghost sm" href="prices.html">Show all</a>
+          </div>`;
+        document.getElementById('addForGroup').onclick = () => table.then(t => t.openAdd({ 'GROUP ID': focus }));
+      }
+    });
+
+    if (focus) {
+      const search = document.getElementById('Prices_search');
+      if (search) { search.value = focus; search.dispatchEvent(new Event('input', { bubbles: true })); }
+    }
+  });
+</script>
+</body>
+</html>

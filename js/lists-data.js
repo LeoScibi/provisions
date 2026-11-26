@@ -22,6 +22,8 @@ async function loadListsData(spreadsheetId, token) {
   const groupsP = loadProductGroups(spreadsheetId); // in parallel with the reads below
   const cutsP = loadOptionalTab(spreadsheetId, 'Cuts');
   const holdsP = loadLotHolds(spreadsheetId); // js/lot-holds.js — lotHold() after this
+  // Selling prices, only where js/pricing.js is loaded (Packing's Xero export).
+  const pricesP = typeof loadPrices === 'function' ? loadPrices(spreadsheetId) : null;
   const [orderRows, lineRows, allocRows, productRows, deliveryRows, customerRows, poRows, polRows] = await Promise.all([
     sheetsGet(spreadsheetId, 'Orders!A:Z', token),
     sheetsGet(spreadsheetId, 'OrderLines!A:Z', token),
@@ -37,7 +39,9 @@ async function loadListsData(spreadsheetId, token) {
   const products = toObjects(productRows);
   products.forEach(p => { productByCode[p['Product code']] = p; });
   registerProducts(products);
-  registerProductGroups(await groupsP);
+  const groups = await groupsP;
+  registerProductGroups(groups);
+  if (pricesP) registerPricing({ products, groups, prices: await pricesP });
 
   const deliveryByKey = {};
   toObjects(deliveryRows).forEach(d => {

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=50">
+<link rel="stylesheet" href="css/style.css?v=52">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -106,13 +106,16 @@
 </main>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=13"></script>
+<script src="js/shell.js?v=14"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
+<script src="js/pricing.js?v=1"></script>
 <script>
   // Sales and purchases for any period, against any other. Nothing new is
   // stored: sales come from Orders + OrderLines (by delivery date, valued at
-  // list price = landed cost ÷ (1 − GP at list)), purchases from
+  // the customer's price — their price list, else List price £ or landed
+  // cost ÷ (1 − GP at list); unitPrice() in js/pricing.js — before their
+  // Discount (%)), purchases from
   // PurchaseOrders + PurchaseOrderLines (by order date, at cost price),
   // excluding cancelled POs. Weight counts kg lines, and pieces of products
   // with a nominal weight.
@@ -214,11 +217,6 @@
   }
 
   // ---- values ----
-  function listPrice(p) {
-    const landed = parseFloat(p['Landed cost £']) || parseFloat(p['Cost price £']) || 0;
-    const gp = parseFloat(p['GP at list']);
-    return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
-  }
   // Value and weight of `qty` in `unit` of product `p`, at `price` (per kg
   // for products priced per kg, per piece otherwise).
   function lineMeasures(p, qty, unit, price) {
@@ -234,14 +232,17 @@
     const cfg = getStoredConfig();
     setStatus('Loading…');
     try {
-      const tabs = ['Orders', 'OrderLines', 'Products', 'PurchaseOrders', 'PurchaseOrderLines'];
-      const [rows, groups] = await Promise.all([
+      const tabs = ['Orders', 'OrderLines', 'Products', 'PurchaseOrders', 'PurchaseOrderLines', 'Customers'];
+      const [rows, groups, prices] = await Promise.all([
         Promise.all(tabs.map(t => sheetsGet(cfg.spreadsheetId, `${t}!A:AZ`))),
-        loadProductGroups(cfg.spreadsheetId)
+        loadProductGroups(cfg.spreadsheetId),
+        loadPrices(cfg.spreadsheetId)
       ]);
-      const [orders, lines, products, pos, poLines] = rows.map(toObjects);
+      const [orders, lines, products, pos, poLines, customers] = rows.map(toObjects);
       registerProducts(products);
       registerProductGroups(groups);
+      registerPricing({ products, groups, prices });
+      const customerByName = Object.fromEntries(customers.map(c => [c['Customer name (as in Xero)'], c]));
       const byCode = Object.fromEntries(products.map(p => [p['Product code'], p]));
       const groupName = Object.fromEntries(groups.map(g => [g.ID, g['Product name']]));
       const productName = p => groupName[p['Group ID']] || (p['Product name'] || '').split(' — ')[0];
@@ -254,7 +255,7 @@
         const date = o && (o['DELIVERY DATE'] || o.DATE);
         if (!date || !p) return;
         const qty = parseFloat(l['QTY ORDERED']) || 0;
-        sales.push(record(p, l, lineMeasures(p, qty, l.UNIT, listPrice(p)), { date, customer: o.CUSTOMER, supplier: p['Default supplier'], order: o.ID, qty }));
+        sales.push(record(p, l, lineMeasures(p, qty, l.UNIT, unitPrice(p, customerByName[o.CUSTOMER], date).price), { date, customer: o.CUSTOMER, supplier: p['Default supplier'], order: o.ID, qty }));
       });
 
       const poById = Object.fromEntries(pos.map(o => [o.ID, o]));
@@ -457,7 +458,7 @@
 
     // Say so when the comparison reaches back before anything was recorded.
     const earliest = data[kind].reduce((m, r) => !m || r.date < m ? r.date : m, '');
-    setStatus(b && earliest && b.from < earliest ? `Nothing recorded before ${fmtDay(earliest, true)}, so the comparison period (from ${fmtDay(b.from, true)}) is incomplete.` : (kind === 'sales' ? 'Sales at list price, by delivery date.' : 'Purchases at cost price, by order date.'));
+    setStatus(b && earliest && b.from < earliest ? `Nothing recorded before ${fmtDay(earliest, true)}, so the comparison period (from ${fmtDay(b.from, true)}) is incomplete.` : (kind === 'sales' ? 'Sales at each customer’s price before discount, by delivery date.' : 'Purchases at cost price, by order date.'));
   }
 
   function renderStats(all, recsA, recsB, b, kind, measureLabel, orderWord) {

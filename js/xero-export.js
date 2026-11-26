@@ -11,7 +11,12 @@
 // - AccountCode, TaxType and tracking must match Xero exactly (TaxType is the tax
 //   rate's display name, e.g. "Zero Rated Income");
 // - an unknown InventoryItemCode creates a new inventory item, so only a
-//   product's own `Xero item code` is ever sent;
+//   real `Xero item code` is ever sent — and one per product: a cut portion
+//   invoices as the cheese it's cut from (invoiceItemCode() in
+//   js/pricing.js: the product's ProductGroups code, else the whole's own);
+// - UnitAmount is the customer's price for the delivery date (unitPrice() in
+//   js/pricing.js — their price list, a customer price, else List price £),
+//   with their Discount (%) in the Discount column;
 // - an InvoiceNumber already in Xero is skipped, so the order ID is used as
 //   the invoice number and exporting the same week twice is harmless;
 //   Reference is the customer's own ref for the order (Orders' CUSTOMER
@@ -65,17 +70,6 @@ function xeroTaxType(vat) {
 
 const xeroNum = v => parseFloat(v) || 0;
 const xeroRound = (n, dp) => Math.round(n * 10 ** dp) / 10 ** dp;
-
-// Price per pricing unit (per kg or per piece). The printed `List price £`
-// when there is one, else the calculated list price Orders and Reports use:
-// landed cost ÷ (1 − GP at list).
-function xeroUnitPrice(p) {
-  const printed = parseFloat(p['List price £']);
-  if (printed > 0) return printed;
-  const landed = xeroNum(p['Landed cost £']) || xeroNum(p['Cost price £']);
-  const gp = parseFloat(p['GP at list']);
-  return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
-}
 
 function xeroDate(iso) {
   const [y, m, d] = (iso || '').split('-');
@@ -153,7 +147,9 @@ function xeroInvoiceFor(order, ctx) {
       parts.forEach(x => { x.note = note(x.qty); });
     }
 
-    const price = xeroUnitPrice(p);
+    const price = unitPrice(p, customer, order['DELIVERY DATE']).price;
+    const itemCode = invoiceItemCode(p);
+    if (!itemCode) warnings.push(`${name}: no Xero item code`);
     if (!price) warnings.push(`${name}: no price — fill it in on the draft in Xero`);
     if (!p['VAT rate']) warnings.push(`${name}: no VAT rate`);
     const replaces = l.REPLACES ? ` (replaces ${ctx.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES})` : '';
@@ -161,7 +157,7 @@ function xeroInvoiceFor(order, ctx) {
       const bbe = x.lot ? xeroDate((ctx.deliveryByKey || {})[`${x.wheel} ${x.lot}`]?.['BEST BEFORE DATE']) : '';
       const lotText = x.lot ? `Lot ${x.lot}${bbe ? ` (BB ${bbe})` : ''}` : '';
       lines.push({
-        itemCode: p['Xero item code'] || '',
+        itemCode,
         description: [name + replaces, x.note, lotText].filter(Boolean).join(' · '),
         qty: xeroRound(x.qty, 3),
         price: xeroRound(price, 2),

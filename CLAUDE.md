@@ -84,12 +84,16 @@ models, sheet schemas, or conventions between the two.
   (natural key, not an auto-id). Mirrors the Xero-linked schema: cost/landed
   cost, cut-to-order fields, Xero item/account codes.
 - **ProductGroups** — one row per *product* (a card on `products.html`),
-  the thing a photo, spec sheet and training notes belong to; the
-  **Products** tab is really its SKUs. A SKU belongs to a product via
-  Products.`Group ID`: each linked SKU is a Wholesale SKU (e.g. a whole wheel
-  plus its portions), except the codes in the product's `Shop SKU` /
-  `Selfridges SKU`, which fill those two channels — one SKU each, either may
-  be empty. Different sizes (210g / 3kg) are separate products. A product's
+  the thing a photo, spec sheet, training notes and its one `Xero item code`
+  belong to; the **Products** tab is really its SKUs. A SKU belongs to a
+  product via Products.`Group ID` (e.g. a whole wheel plus its portions).
+  **One invoice SKU per product:** every SKU of a product invoices in Xero as
+  the product's `Xero item code` (else the whole it's cut from's own code) —
+  `invoiceItemCode()` in `js/pricing.js` — so cut cheese bills as the base
+  cheese by weight. Channels (wholesale, the shops, Selfridges) share those
+  SKUs and differ only by price list. `Shop SKU` / `Selfridges SKU` are no
+  longer used (kept as columns, hidden in the form). Different sizes (210g /
+  3kg) are separate products. A product's
   photo wins over its SKUs' own everywhere (`productPhoto()` in
   `js/product-ui.js`). "Group SKUs into products" on the Products page is the
   re-runnable grouping. Was the cheese-only "Cheeses" tab / `Cheese ID`
@@ -97,12 +101,22 @@ models, sheet schemas, or conventions between the two.
   `Origin`, `Maker`, `Tasting note`, `Story`, `Badges` (comma-separated),
   `New` and `Section` are the wholesale portfolio's wording for the product;
   Products.`Size` and `List price £` are what it prints per SKU. `List price £`
-  is the printed price: Orders and Reports still calculate theirs from `GP at
-  list`, which doesn't always match it.
+  is the printed price and the Standard price everywhere (`js/pricing.js`);
+  without it the price is worked out from `GP at list`.
   The "Snippet" button on a product's SKUs tab (`js/snippet.js`) shows those
   fields as one card in the portfolio's design, to save as a PNG or print; its
   NEW ribbon is switched on there and stored in `New`.
 - **Suppliers**, **Customers**, **TransportCompanies** — reference lists.
+  Customers.`Price list` (`PRICE_LISTS` in `js/pricing.js`: Standard / P2P /
+  Selfridges; blank = Standard) picks which prices a customer pays.
+- **Prices** (`prices.html`, "Edit prices" on a product) — special selling
+  prices: one row per product (`GROUP ID`) + `PRICE LIST`, or + one
+  `CUSTOMER`, with optional `VALID FROM`/`VALID TO`. **Every selling price
+  goes through `unitPrice(p, customer, date)` in `js/pricing.js`** (Orders'
+  live total, Reports, the Xero export): customer row → price-list row →
+  `List price £` → landed cost ÷ (1 − GP at list), per kg or per piece, before
+  the customer's Discount (%). A portion is priced as its whole. Pages call
+  `registerPricing({ products, groups, prices })` after `loadPrices()`.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
   delivery date range. Status: Ordered → Delivered/Cancelled — delivery is
@@ -164,8 +178,8 @@ models, sheet schemas, or conventions between the two.
   delivery *week*; the date saved is the customer's usual day in it
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
   another day adds "Requested delivery: …" to the notes. Its button row shows a
-  live total ex VAT (`renderOrderTotal()`): list price, as in Reports, less the
-  customer's Discount (%). A product's **+** (in search, or −/+ on its order line)
+  live total ex VAT (`renderOrderTotal()`): each line at `unitPrice()` for the
+  customer and delivery date, less the customer's Discount (%). A product's **+** (in search, or −/+ on its order line)
   changes the quantity by one piece/case without a pop-up (`bumpDraft()`); each
   line shows where its stock comes from as chips — green *In stock* (a lot),
   blue *Arriving* (a PO reservation), red *Short*. Clicking a product or line
@@ -235,8 +249,9 @@ models, sheet schemas, or conventions between the two.
   and Selfridges; every line is tracked Department: Food. An order is only exportable once
   every piece `weighSource()` says gets weighed has a Cuts row; those lines
   bill the actual kilos. A line from several lots becomes one invoice line
-  per lot, its description ending with that lot and best-before. Price is `List price £`, else the calculated list
-  price. Reference = the order's `CUSTOMER REF` (the customer's PO number,
+  per lot, its description ending with that lot and best-before.
+  `InventoryItemCode` is `invoiceItemCode()` (one per product) and the price is
+  `unitPrice()` for the customer on the delivery date (`js/pricing.js`). Reference = the order's `CUSTOMER REF` (the customer's PO number,
   typed in New / Edit order), else the order ID. InvoiceNumber = order ID, so Xero skips an order already imported;
   nothing is written back to the sheet. TEST orders are left out.
 - **StockTakes** / **StockTakeLines** — a physical count session
@@ -259,7 +274,8 @@ index.html          Today: sign-in, then the next delivery run step by step
                     after it, goods in, an alerts strip; big warehouse buttons
                     on a phone
 setup.html            Auto-creates required tabs + headers — run first on a new sheet
-products.html           Products (one card each, SKUs by channel inside) / SKUs views
+products.html           Products (one card each: SKUs, Xero code, prices) / SKUs views
+prices.html             Special prices by price list or customer
 suppliers.html            Supplier list
 customers.html              Customer list
 transport.html               Hauliers bringing goods in, with contacts

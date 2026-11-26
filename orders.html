@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=50">
+<link rel="stylesheet" href="css/style.css?v=52">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -62,10 +62,11 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=13"></script>
+<script src="js/shell.js?v=14"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=5"></script>
 <script src="js/product-ui.js?v=5"></script>
+<script src="js/pricing.js?v=1"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
@@ -190,6 +191,7 @@
     setStatus('Loading...');
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
+      const pricesP = loadPrices(cfg.spreadsheetId);
       const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
       const holdsP = loadLotHolds(cfg.spreadsheetId); // lots on hold never go into the pool
       const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
@@ -209,6 +211,7 @@
       registerProducts(products);
       productGroups = await groupsP;
       registerProductGroups(productGroups);
+      registerPricing({ products, groups: productGroups, prices: await pricesP });
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       lineHeaders = lineRows[0] || [];
@@ -676,6 +679,7 @@
     const previousDate = dateInput.value;
     dateInput.value = isoLocal(date);
     if (previousDate && previousDate !== dateInput.value) repickForDate(dateInput.value);
+    if (previousDate !== dateInput.value) renderOrderTotal(); // prices can change by date
     // Keep one "Requested delivery:" line in the notes while a specific day is picked.
     const notesEl = form.querySelector('#ord_notes');
     const rest = notesEl.value.split('\n').filter(l => !l.startsWith(REQUESTED_PREFIX));
@@ -842,32 +846,30 @@
 
   // ---- New Order: running total, in the button row ----
   //
-  // List price = landed cost ÷ (1 − GP at list), per kg or per piece by the
-  // product's pricing basis — the same figure Reports uses — less the
-  // customer's Discount (%). Shop and Selfridges prices live in Xero, so for
-  // those this is an estimate until Xero is connected.
-  function listPrice(p) {
-    const landed = parseFloat(p['Landed cost £']) || parseFloat(p['Cost price £']) || 0;
-    const gp = parseFloat(p['GP at list']);
-    return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
+  // Each line at the customer's price for the delivery date (unitPrice() in
+  // js/pricing.js: their own Prices row, their price list's, else List price
+  // £ or the calculated list price — the same figure Reports and the Xero
+  // export use), less the customer's Discount (%).
+  function draftCustomer() {
+    return customers.find(x => x['Customer name (as in Xero)'] === form.querySelector('#ord_customer')?.value);
   }
-  function lineValue(l) {
+  function lineValue(l, customer, date) {
     const p = productOf(l.code);
     if (!p) return 0;
-    const billable = p['Pricing basis'] === 'Per kg' && l.unit !== 'kg' ? l.qty * (parseFloat(p['Nominal weight (kg)']) || 0) : l.qty;
-    return billable * listPrice(p);
+    return billableQty(p, l.qty, l.unit) * unitPrice(p, customer, date).price;
   }
   function renderOrderTotal() {
     const totalEl = form.querySelector('#ord_total');
     if (!totalEl) return;
-    const lines = expandDraftLines();
-    const values = lines.map(lineValue);
-    const c = customers.find(x => x['Customer name (as in Xero)'] === form.querySelector('#ord_customer')?.value);
+    const c = draftCustomer();
+    const date = form.querySelector('#ord_deliveryDate')?.value || '';
+    const values = expandDraftLines().map(l => lineValue(l, c, date));
     const discount = parseFloat(c?.['Discount (%)']) || 0;
     const total = values.reduce((s, v) => s + v, 0) * (1 - discount / 100);
     const unpriced = values.filter(v => !v).length;
+    const list = c ? customerPriceList(c) : '';
     totalEl.textContent = `£${total.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', discount ? `after ${discount}% discount` : '', unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
+    form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', list && list !== DEFAULT_PRICE_LIST ? `${list} prices` : '', discount ? `after ${discount}% discount` : '', unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
   }
 
   // ---- New Order: compact search cards (right) and the order list (left) ----

@@ -804,7 +804,7 @@ button.rp-bar:hover{background:var(--paper)}
 .view-off{height:0;overflow:hidden;visibility:hidden}
 .view-off dialog{visibility:visible}
 
-/* A product's SKUs by channel (products.html) */
+/* A product's SKUs, Xero code and prices (products.html) */
 .cz-channel{margin-bottom:18px}
 .cz-channel h4{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin:0 0 8px;display:flex;align-items:center;gap:8px}
 .cz-sku{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;margin-bottom:6px}
@@ -816,6 +816,8 @@ button.rp-bar:hover{background:var(--paper)}
 .cz-link{display:flex;gap:8px;align-items:center;margin-top:8px}
 .cz-link select{flex:1;min-width:0}
 .cz-link{flex-wrap:wrap}
+.cz-price{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;margin-bottom:6px;font-size:13.5px}
+.cz-price strong{font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* Order/PO dialogs opened in place over another page (openInPlace in
    js/shell.js): the parent page shows the shade, the embedded page only
@@ -1215,8 +1217,8 @@ a.alert-chip:hover{filter:brightness(.97)}
 .board{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
 /* Too narrow for six columns: two rows of three, then one column on a phone. */
 @media (max-width:1180px){.board{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:640px){.board{grid-template-columns:minmax(0,1fr)}.col{min-height:0}}
-.col{min-width:0;background:var(--hair);border-radius:16px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:420px}
+@media (max-width:640px){.board{grid-template-columns:minmax(0,1fr)}.board .col{min-height:0}}
+.board .col{min-width:0;background:var(--hair);border-radius:16px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:420px}
 .col-h{display:flex;align-items:center;gap:8px;padding:2px 4px 0}
 .col-h h3{margin:0;font-size:14px;font-weight:700;color:var(--ink);text-transform:none;letter-spacing:0}
 .col-n{margin-left:auto;font-family:'Roboto Mono',monospace;font-size:12px;color:var(--steel)}

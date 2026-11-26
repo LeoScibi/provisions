@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=50">
+<link rel="stylesheet" href="css/style.css?v=52">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -85,14 +85,15 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=13"></script>
+<script src="js/shell.js?v=14"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
+<script src="js/pricing.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/drive.js?v=3"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/stock-calc.js?v=5"></script>
-<script src="js/crud-page.js?v=21"></script>
+<script src="js/crud-page.js?v=22"></script>
 <script src="js/snippet.js?v=1"></script>
 <script>
   function requireAuth() {
@@ -184,13 +185,14 @@
 
   // ---- Products view: one card per product (the ProductGroups tab) ----
   //
-  // A product owns the photo, spec sheet and training notes; its SKUs are
-  // Products rows whose Group ID points at it. Each is a Wholesale SKU
-  // (e.g. a whole wheel plus its portions), except the codes in the
-  // product's Shop SKU / Selfridges SKU fields, which fill those two
-  // channels — one SKU each, either may be empty.
+  // A product owns the photo, spec sheet, training notes and its one Xero
+  // item code; its SKUs are Products rows whose Group ID points at it (e.g. a
+  // whole wheel plus its portions), all invoiced as that one code. Every
+  // channel buys the same SKUs — the shops and Selfridges just pay their own
+  // price list's price (the Prices tab, prices.html; js/pricing.js). The old
+  // Shop SKU / Selfridges SKU columns are no longer read.
 
-  const GROUP_HEADERS = ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category','Origin','Maker','Tasting note','Story','Badges','New','Section'];
+  const GROUP_HEADERS = ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category','Origin','Maker','Tasting note','Story','Badges','New','Section','Xero item code'];
   const CATEGORIES = ['Biscuits','Charcuterie','Cheese','Condiment','Deli & Snacks','Jam','Non-Food','Oil','Pasta','Preserved Veg','Pâté & Terrine','Ready Meals','Tinned Fish','Vinegar'];
 
   let skusTable = null, groupsTable = null, skuOpenEdit = null;
@@ -217,11 +219,16 @@
   }
 
   const groupSkus = pick => skuIndex.byGroup[pick('ID')] || [];
+  // The one code every SKU of the product invoices as: its own, else the
+  // main (whole) SKU's — as invoiceItemCode() in js/pricing.js.
+  const groupXeroCode = pick => (pick('Xero item code') || '').trim() || (mainSku(pick)?.['Xero item code'] || '').trim();
+  let priceRows = null; // the Prices tab, once loaded
   // The SKU that speaks for the product on its card: the whole (not cut
   // from anything), heaviest first.
   function mainSku(pick) {
-    const skus = groupSkus(pick).filter(p => p['Product code'] !== (pick('Shop SKU') || '').trim() && p['Product code'] !== (pick('Selfridges SKU') || '').trim());
-    const list = skus.length ? skus : groupSkus(pick);
+    // An old "(Selfridges)" SKU never speaks for the product.
+    const all = groupSkus(pick), own = all.filter(p => !/\(Selfridges\)\s*$/i.test(p['Product name'] || ''));
+    const list = own.length ? own : all;
     return list.filter(p => !p['Cut from (code)']).sort((a, b) => (parseFloat(b['Nominal weight (kg)']) || 0) - (parseFloat(a['Nominal weight (kg)']) || 0))[0] || list[0] || null;
   }
   const skuPick = sku => key => (sku ? sku[key] : '') || '';
@@ -236,7 +243,7 @@
     const skus = groupSkus(pick);
     if (!skus.length) return [{ text: 'No SKUs', tone: 'warn' }];
     const list = [];
-    if (skus.some(p => !p['Xero item code'])) list.push({ text: 'No Xero code', tone: 'warn' });
+    if (!groupXeroCode(pick)) list.push({ text: 'No Xero code', tone: 'warn' });
     return list;
   }
 
@@ -260,8 +267,8 @@
       autoId: 'PG',
       fields: [
         { key: 'Product name', label: 'Product name', type: 'text', required: true, primary: true, placeholder: 'e.g. Comté Petite 10/14M' },
-        { key: 'Shop SKU', label: 'Shop SKU', type: 'text', placeholder: 'SKU / Xero code used by the shops' },
-        { key: 'Selfridges SKU', label: 'Selfridges SKU', type: 'text', placeholder: 'SKU / Xero code used for Selfridges' },
+        { key: 'Shop SKU', label: 'Shop SKU (no longer used)', type: 'hidden' },
+        { key: 'Selfridges SKU', label: 'Selfridges SKU (no longer used)', type: 'hidden' },
         { key: 'Nominal wheel weight (kg)', label: 'Nominal wheel weight (kg)', type: 'number', placeholder: 'Cheese cut from a wheel only' },
         {
           key: 'Photo URL', label: 'Photo', type: 'image', placeholder: 'https://... — or upload below',
@@ -292,7 +299,8 @@
         { key: 'Story', label: 'Story', type: 'textarea', section: 'Portfolio', placeholder: 'The paragraph under it: where it comes from, how to use it' },
         { key: 'Badges', label: 'Badges', type: 'text', section: 'Portfolio', placeholder: "Comma-separated: Raw milk, Pasteurised, Thermised, Vegetarian rennet, Grab & go, Cow's milk, Goat's milk, Sheep's milk, Meat slicer required, London delivery only" },
         { key: 'New', label: 'New this season', type: 'checkbox', section: 'Portfolio', trueValue: 'Yes', falseValue: 'No' },
-        { key: 'Section', label: 'Portfolio section', type: 'text', section: 'Portfolio', placeholder: "e.g. Soft cow's milk cheese" }
+        { key: 'Section', label: 'Portfolio section', type: 'text', section: 'Portfolio', placeholder: "e.g. Soft cow's milk cheese" },
+        { key: 'Xero item code', label: 'Xero item code', type: 'text', placeholder: 'The one code every SKU of this product invoices as — blank uses the whole’s own' }
       ],
       catalogue: {
         layout: 'cards',
@@ -352,13 +360,13 @@
     (await groupsTable).reload();
   }
 
-  // The SKUs tab of a product: Wholesale (link / unlink / add), Shop and
-  // Selfridges. Clicking a SKU opens its own record on top.
+  // The SKUs tab of a product: its SKUs (link / unlink / add), the Xero code
+  // they all invoice as, and its prices by price list. Clicking a SKU opens
+  // its own record on top.
   function renderGroupSkus(container, pick) {
     const id = pick('ID');
     openGroupSkus = () => { if (container.isConnected) renderGroupSkus(container, pick); else openGroupSkus = null; };
-    const shop = (pick('Shop SKU') || '').trim(), selfridges = (pick('Selfridges SKU') || '').trim();
-    const wholesale = (skuIndex.byGroup[id] || []).filter(p => p['Product code'] !== shop && p['Product code'] !== selfridges)
+    const wholesale = (skuIndex.byGroup[id] || [])
       .sort((a, b) => (parseFloat(b['Nominal weight (kg)']) || 0) - (parseFloat(a['Nominal weight (kg)']) || 0));
     const unlinked = skuIndex.all.filter(p => !p['Group ID']).sort((a, b) => (a['Product name'] || '').localeCompare(b['Product name'] || ''));
     const col = skuIndex.groupCol;
@@ -370,16 +378,23 @@
           <div class="code">${escapeHtml(p['Product code'])}${p['Cut from (code)'] ? ` · cut from ${escapeHtml(p['Cut from (code)'])}` : ''}${p['Nominal weight (kg)'] ? ` · ${escapeHtml(p['Nominal weight (kg)'])}kg` : ''}</div></div>
         ${removable ? `<button type="button" class="sp-remove" data-unlink="${escapeHtml(p['Product code'])}" title="Take out of this product" aria-label="Take ${escapeHtml(p['Product name'])} out of this product"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ''}
       </div>`;
-    const channel = (label, code) => {
-      if (!code) return `<div class="cz-empty">No ${label} SKU — set one under Details if it's sold there.</div>`;
-      const p = skuIndex.byCode[code];
-      return p ? skuRow(p, false) : `<div class="cz-sku"><span class="pthumb pthumb-xs"></span><div class="cz-sku-t"><div class="cz-sku-name">${escapeHtml(code)}</div><div class="code">Not in SKUs — likely only in Xero</div></div></div>`;
-    };
+    const main = mainSku(pick);
+    const per = main?.['Pricing basis'] === 'Per kg' ? '/kg' : ' each';
+    const money = n => `£${(parseFloat(n) || 0).toFixed(2)}${per}`;
+    const xero = groupXeroCode(pick);
+    const prices = (priceRows || []).filter(r => r['GROUP ID'] === id)
+      .sort((a, b) => (a['PRICE LIST'] || '').localeCompare(b['PRICE LIST'] || '') || (a.CUSTOMER || '').localeCompare(b.CUSTOMER || ''));
+    const priceRow = (label, value, sub) => `<div class="cz-price"><span>${label}${sub ? ` <span class="code">${sub}</span>` : ''}</span><strong>${value}</strong></div>`;
+    const pricesHtml = priceRows === null ? '<div class="cz-empty">Loading prices…</div>' : [
+      priceRow('Standard (list price)', main ? money(skuListPrice(main)) : '—', main && !(parseFloat(main['List price £']) > 0) ? 'calculated from GP' : ''),
+      ...prices.map(r => priceRow(escapeHtml(r.CUSTOMER || r['PRICE LIST'] || DEFAULT_PRICE_LIST), money(r['PRICE £']),
+        [r.CUSTOMER ? escapeHtml(r['PRICE LIST'] || '') : '', r['VALID FROM'] || r['VALID TO'] ? `${escapeHtml(r['VALID FROM'] || '…')} → ${escapeHtml(r['VALID TO'] || '…')}` : ''].filter(Boolean).join(' · ')))
+    ].join('');
 
     container.innerHTML = `
       <div class="sp-section">
         <div class="cz-snippet"><button type="button" class="btn ghost sm" id="pg_snippetBtn">Snippet</button></div>
-        <div class="cz-channel"><h4>Wholesale <span class="code">${wholesale.length}</span></h4>
+        <div class="cz-channel"><h4>SKUs <span class="code">${wholesale.length}</span></h4>
           ${wholesale.length ? wholesale.map(p => skuRow(p, true)).join('') : '<div class="cz-empty">No wholesale SKUs yet.</div>'}
           <div class="cz-link">
             <select id="pg_linkSel"><option value="">Add an existing SKU…</option>${unlinked.map(p => `<option value="${escapeHtml(p['Product code'])}">${escapeHtml(p['Product name'])} (${escapeHtml(p['Product code'])})</option>`).join('')}</select>
@@ -387,8 +402,12 @@
             <button type="button" class="btn ghost sm" id="pg_newBtn">+ New SKU</button>
           </div>
         </div>
-        <div class="cz-channel"><h4>Shop</h4>${channel('Shop', shop)}</div>
-        <div class="cz-channel"><h4>Selfridges</h4>${channel('Selfridges', selfridges)}</div>
+        <div class="cz-channel"><h4>Invoiced in Xero as</h4>
+          ${xero ? `<div class="cz-price"><span>Every SKU above, by ${main?.['Pricing basis'] === 'Per kg' ? 'weight' : 'the piece'}</span><strong class="code">${escapeHtml(xero)}</strong></div>` : '<div class="cz-empty">No Xero item code — set one under Details.</div>'}
+        </div>
+        <div class="cz-channel"><h4>Prices</h4>${pricesHtml}
+          <div class="cz-link"><a class="btn ghost sm" href="prices.html?group=${encodeURIComponent(id)}">Edit prices</a></div>
+        </div>
       </div>`;
 
     const setGroup = async (code, value) => {
@@ -442,8 +461,8 @@
   // product with one SKU, its trailing weight dropped ("Brie Dongé 3kg" →
   // "Brie Dongé") unless that would merge two sizes — different sizes stay
   // separate products ("Fig & Honey Chutney 210g" / "3kg"). A
-  // "(Selfridges)" SKU fills the Selfridges slot of the one product with the
-  // same name, or becomes a product of its own. SKUs already in a product
+  // "(Selfridges)" SKU (from before every channel shared one SKU) joins the
+  // one product with the same name, or becomes a product of its own. SKUs already in a product
   // are left alone and a product that already exists by name is reused, so
   // it's safe to re-run; existing products missing a Category get their
   // SKUs' one.
@@ -541,13 +560,12 @@
       body.innerHTML = `
         <p style="margin:0 0 12px; font-size:13.5px;">This creates <strong>${newCount} product(s)</strong>${plan.length > newCount ? ` (and adds to ${plan.length - newCount} existing)` : ''} from <strong>${linkCount} SKU(s)</strong>${fillCategory.length ? `, and fills in the category on ${fillCategory.length} existing product(s)` : ''}. Nothing is deleted or renamed; SKU photos are copied onto the product. Check the grouping, then Create.</p>
         ${plan.length ? `<div class="scroll" style="max-height:52vh; overflow:auto;">
-          <table><thead><tr><th>Product</th><th>Category</th><th>Wholesale SKUs</th><th>Selfridges</th></tr></thead>
+          <table><thead><tr><th>Product</th><th>Category</th><th>SKUs</th></tr></thead>
           <tbody>${plan.map(g => `
             <tr>
               <td>${productCell({ 'Photo URL': g.photo }, `<strong>${escapeHtml(g.name)}</strong>${g.existingId ? ` <span class="tag t-amb">exists · ${escapeHtml(g.existingId)}</span>` : ''}`, 'xs')}</td>
               <td>${escapeHtml(g.category)}</td>
-              <td class="code" style="white-space:normal;">${g.wholesale.map(p => escapeHtml(p['Product code'])).join(', ') || '—'}</td>
-              <td class="code">${escapeHtml(g.selfridges) || '—'}</td>
+              <td class="code" style="white-space:normal;">${g.members.map(p => escapeHtml(p['Product code'])).join(', ') || '—'}</td>
             </tr>`).join('')}</tbody></table>
         </div>` : ''}`;
       applyBtn.textContent = newCount ? `Create ${newCount} product(s) from ${linkCount} SKU(s)`
@@ -570,7 +588,7 @@
         if (g.existingId) { g.id = g.existingId; return; }
         g.id = nextId(base, 'PG');
         base = base.concat([[g.id]]);
-        newRows.push([g.id, g.name, '', g.selfridges, g.nominal, g.photo, g.techSheet, g.training, '', 'Yes', g.category]);
+        newRows.push([g.id, g.name, '', '', g.nominal, g.photo, g.techSheet, g.training, '', 'Yes', g.category]);
       });
       if (newRows.length) await sheetsAppendRows(cfg.spreadsheetId, 'ProductGroups!A:K', newRows);
       const writes = plan.flatMap(g => g.members.map(p => ({ range: `Products!${skuIndex.groupCol}${p.rowNumber}`, values: [[g.id]] })))
@@ -696,6 +714,7 @@
     groupsTable = initGroupsTable();
 
     loadStock().then(() => { products.then(p => p.rerender()); groupsTable.then(g => g.rerender()); });
+    loadPrices(getStoredConfig().spreadsheetId).then(rows => { priceRows = rows; openGroupSkus?.(); });
 
     document.getElementById('addProductBtn').addEventListener('click', () => groupsTable.then(g => g.openAdd()));
     document.getElementById('addSkuBtn').addEventListener('click', () => products.then(p => p.openAdd()));

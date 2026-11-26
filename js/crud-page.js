@@ -33,6 +33,9 @@
 //     { key:'COST', label:'Cost', type:'number', format:'currency' },
 //     { key:'PHOTO', label:'Photo', type:'image' },             // plain URL input; renders as a table thumbnail
 //     { key:'PHOTO', label:'Photo', type:'image', onUpload },   // + an Upload button, same contract as 'file' below
+//     { key:'GROUP', label:'Product', type:'ref', refTab:'ProductGroups', refValue:'ID', refLabel:'Product name',
+//       display: v => html },                                // optional: the table cell's HTML for a value
+//     { key:'OLD', label:'Old column', type:'hidden' },         // not shown; keeps the cell's value on save (a retired column)
 //   ],
 //   inlineEdit: true,         // opt-in: click a cell to edit it in place instead
 //                              // of opening the dialog (see below) — off by
@@ -439,7 +442,7 @@ async function initCrudTable(config) {
     const extraTab = detailSection ? `<button type="button" class="cat-tab" data-dlg-tab="${EXTRA}">${escapeHtml(detailSection.label)}</button>` : '';
     const extraPanel = detailSection ? `<div class="dlg-tab-panel dlg-extra" data-dlg-panel="${EXTRA}" id="${tab}_dlgExtra" style="display:none;"></div>` : '';
 
-    const fieldHtml = (f) => `<div class="col field"><label>${escapeHtml(f.label)}${f.required ? ' *' : ''}${f.type === 'file' ? ` <a href="#" class="file-field-view" id="${fid(f)}_view" target="_blank" rel="noopener">Open ↗</a>` : ''}</label>${fieldInputHtml(f)}</div>`;
+    const fieldHtml = (f) => f.type === 'hidden' ? `<input type="hidden" id="${fid(f)}">` : `<div class="col field"><label>${escapeHtml(f.label)}${f.required ? ' *' : ''}${f.type === 'file' ? ` <a href="#" class="file-field-view" id="${fid(f)}_view" target="_blank" rel="noopener">Open ↗</a>` : ''}</label>${fieldInputHtml(f)}</div>`;
     const rowClass = `row${catalogue ? ' grid3' : ''}`;
     const bodyHtml = hasTabs ? `
       <div class="cat-tabs dlg-tabs" id="${tab}_dlgTabs">
@@ -553,6 +556,7 @@ async function initCrudTable(config) {
   }
 
   function displayCell(field, value) {
+    if (field && field.display) return field.display(value);
     if (field && field.type === 'checkbox') {
       const on = (value || '').toString().toUpperCase() === (field.trueValue || 'TRUE').toUpperCase();
       const onLabel = field.trueValue || 'Yes';
@@ -1079,11 +1083,12 @@ async function initCrudTable(config) {
     }
     setDlgStatus('');
     resetFieldValues();
-    Object.entries(prefill).forEach(([key, value]) => {
+    const applyPrefill = () => Object.entries(prefill).forEach(([key, value]) => {
       const f = fields.find(x => x.key === key);
       const el = f && form.querySelector(`#${fid(f)}`);
-      if (el) el.value = value;
+      if (el) { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); }
     });
+    applyPrefill();
     const extraEl = root.querySelector(`#${tab}_dlgExtra`);
     if (extraEl) {
       extraEl.innerHTML = '';
@@ -1093,6 +1098,7 @@ async function initCrudTable(config) {
       showDlgTab();
     }
     await refreshRefOptions();
+    applyPrefill(); // again: a 'ref' field's options only exist now
     dialogEl.showModal();
     guard.arm();
   }
