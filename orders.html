@@ -66,7 +66,7 @@
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=5"></script>
 <script src="js/product-ui.js?v=5"></script>
-<script src="js/pricing.js?v=2"></script>
+<script src="js/pricing.js?v=4"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
@@ -848,8 +848,8 @@
   // ---- New Order: running total, in the button row ----
   //
   // Each line at the customer's price for the delivery date (unitPrice() in
-  // js/pricing.js: their own Prices row, their price list's, else List price
-  // £ or the calculated list price — the same figure Reports and the Xero
+  // js/pricing.js: their price list's Prices row, else List price £ or the
+  // calculated list price — the same figure Reports and the Xero
   // export use), less the order's discount: the higher of the customer's
   // Discount (%) and the best DiscountRules threshold the subtotal reaches
   // (orderDiscount()). A bar under the total fills towards the next threshold

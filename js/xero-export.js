@@ -15,7 +15,7 @@
 //   invoices as the cheese it's cut from (invoiceItemCode() in
 //   js/pricing.js: the product's ProductGroups code, else the whole's own);
 // - UnitAmount is the customer's price for the delivery date (unitPrice() in
-//   js/pricing.js — their price list, a customer price, else List price £),
+//   js/pricing.js — their price list's price, else List price £),
 //   and the order's discount in the Discount column on every line:
 //   orderDiscount() — the higher of the customer's Discount (%) and the best
 //   DiscountRules threshold (e.g. £1,000 → 5%) the invoiced subtotal reaches.

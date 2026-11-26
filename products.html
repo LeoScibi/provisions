@@ -88,7 +88,7 @@
 <script src="js/shell.js?v=15"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
-<script src="js/pricing.js?v=2"></script>
+<script src="js/pricing.js?v=4"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/drive.js?v=3"></script>
 <script src="js/searchable-select.js?v=2"></script>
@@ -383,12 +383,12 @@
     const money = n => `£${(parseFloat(n) || 0).toFixed(2)}${per}`;
     const xero = groupXeroCode(pick);
     const prices = (priceRows || []).filter(r => r['GROUP ID'] === id)
-      .sort((a, b) => (a['PRICE LIST'] || '').localeCompare(b['PRICE LIST'] || '') || (a.CUSTOMER || '').localeCompare(b.CUSTOMER || ''));
+      .sort((a, b) => (a['PRICE LIST'] || '').localeCompare(b['PRICE LIST'] || ''));
     const priceRow = (label, value, sub) => `<div class="cz-price"><span>${label}${sub ? ` <span class="code">${sub}</span>` : ''}</span><strong>${value}</strong></div>`;
     const pricesHtml = priceRows === null ? '<div class="cz-empty">Loading prices…</div>' : [
       priceRow('Standard (list price)', main ? money(skuListPrice(main)) : '—', main && !(parseFloat(main['List price £']) > 0) ? 'calculated from GP' : ''),
-      ...prices.map(r => priceRow(escapeHtml(r.CUSTOMER || r['PRICE LIST'] || DEFAULT_PRICE_LIST), money(r['PRICE £']),
-        [r.CUSTOMER ? escapeHtml(r['PRICE LIST'] || '') : '', r['VALID FROM'] || r['VALID TO'] ? `${escapeHtml(r['VALID FROM'] || '…')} → ${escapeHtml(r['VALID TO'] || '…')}` : ''].filter(Boolean).join(' · ')))
+      ...prices.map(r => priceRow(escapeHtml(r['PRICE LIST'] || DEFAULT_PRICE_LIST), money(r['PRICE £']),
+        r['VALID FROM'] || r['VALID TO'] ? `${escapeHtml(r['VALID FROM'] || '…')} → ${escapeHtml(r['VALID TO'] || '…')}` : ''))
     ].join('');
 
     container.innerHTML = `

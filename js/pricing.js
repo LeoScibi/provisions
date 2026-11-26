@@ -11,12 +11,13 @@
 // by SKU: Customers.`Price list` says which list a customer buys from.
 //
 // unitPrice(p, customer, date) is the price per pricing unit (per kg or per
-// piece, by the SKU's Pricing basis), before the customer's Discount (%):
-//   1. a Prices row for this product and this customer;
-//   2. a Prices row for this product and the customer's price list (no
-//      customer on it);
-//   3. the invoice SKU's `List price £`;
-//   4. the calculated list price, landed cost ÷ (1 − GP at list).
+// piece, by the SKU's Pricing basis), before any discount:
+//   1. a Prices row for this product and the customer's price list;
+//   2. the invoice SKU's `List price £`;
+//   3. the calculated list price, landed cost ÷ (1 − GP at list).
+// There are no per-customer prices: a customer's own deal is their
+// basket-wide Discount (%) (see orderDiscount()). Prices' CUSTOMER column is
+// retired and ignored.
 // A Prices row only counts on dates between its VALID FROM and VALID TO
 // (either may be blank); when several match, the latest VALID FROM wins.
 // Prices rows are by product (ProductGroups ID), so one row prices a wheel and
@@ -46,10 +47,10 @@ function registerPricing({ products = [], groups = [], prices = [], discountRule
     const group = (r['GROUP ID'] || '').toString().trim();
     const price = parseFloat(r['PRICE £']);
     if (!group || !(price > 0)) return;
+    if ((r.CUSTOMER || '').toString().trim()) return; // an old per-customer price: retired, ignored
     (rulesByGroup[group] = rulesByGroup[group] || []).push({
       id: r.ID || '',
       list: (r['PRICE LIST'] || '').toString().trim(),
-      customer: (r.CUSTOMER || '').toString().trim(),
       price,
       from: priceDate(r['VALID FROM']),
       to: priceDate(r['VALID TO'])
@@ -130,8 +131,8 @@ function skuListPrice(p) {
   return landed ? landed / (1 - (isNaN(gp) ? 30 : gp) / 100) : 0;
 }
 
-// { price, source, rule } — source is 'customer' | 'list' | 'list price' |
-// 'calculated' | '' (no price at all). `date` is the delivery date, ISO.
+// { price, source, rule } — source is 'list' | 'list price' | 'calculated' |
+// '' (no price at all). `date` is the delivery date, ISO.
 function unitPrice(p, customer, date) {
   if (!p) return { price: 0, source: '', rule: null };
   const sku = invoiceSku(p);
@@ -139,11 +140,8 @@ function unitPrice(p, customer, date) {
   const live = (priceBook.rulesByGroup[invoiceGroupId(p)] || [])
     .filter(r => (!day || !r.from || r.from <= day) && (!day || !r.to || day <= r.to))
     .sort((a, b) => (b.from || '').localeCompare(a.from || ''));
-  const name = (customer?.['Customer name (as in Xero)'] || '').toString().trim();
-  const mine = name && live.find(r => r.customer === name);
-  if (mine) return { price: mine.price, source: 'customer', rule: mine };
   const list = customerPriceList(customer);
-  const onList = live.find(r => !r.customer && (r.list || DEFAULT_PRICE_LIST) === list);
+  const onList = live.find(r => (r.list || DEFAULT_PRICE_LIST) === list);
   if (onList) return { price: onList.price, source: 'list', rule: onList };
   const own = skuListPrice(sku) || skuListPrice(p);
   const printed = parseFloat(sku['List price £']) > 0 || parseFloat(p['List price £']) > 0;

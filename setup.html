@@ -195,10 +195,11 @@
       headers: ['ID','Product name','Shop SKU','Selfridges SKU','Nominal wheel weight (kg)','Photo URL','Tech sheet URL','Training notes','Notes','Active','Category','Origin','Maker','Tasting note','Story','Badges','New','Section','Xero item code']
     },
     {
-      // Special selling prices (js/pricing.js): one row per product
-      // (ProductGroups ID) + price list, or + one customer for a price only
-      // they get. PRICE £ is per kg or per piece, by the SKU's Pricing basis,
-      // before the customer's Discount (%). VALID FROM / VALID TO bound it
+      // Selling prices by price list (js/pricing.js): one row per product
+      // (ProductGroups ID) + price list. CUSTOMER is retired (no
+      // per-customer prices — a customer's deal is their basket-wide
+      // Discount (%)); it stays so later columns keep their place. PRICE £
+      // is per kg or per piece, by the SKU's Pricing basis, before discounts. VALID FROM / VALID TO bound it
       // (either may be blank). With no row, a customer pays List price £.
       title: 'Prices',
       headers: ['ID','PRICE LIST','GROUP ID','CUSTOMER','PRICE £','VALID FROM','VALID TO','NOTES']

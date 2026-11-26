@@ -109,11 +109,13 @@ models, sheet schemas, or conventions between the two.
 - **Suppliers**, **Customers**, **TransportCompanies** — reference lists.
   Customers.`Price list` (`PRICE_LISTS` in `js/pricing.js`: Standard / P2P /
   Selfridges; blank = Standard) picks which prices a customer pays.
-- **Prices** (`prices.html`, "Edit prices" on a product) — special selling
-  prices: one row per product (`GROUP ID`) + `PRICE LIST`, or + one
-  `CUSTOMER`, with optional `VALID FROM`/`VALID TO`. **Every selling price
+- **Prices** (`prices.html`, "Edit prices" on a product) — selling prices by
+  price list: one row per product (`GROUP ID`) + `PRICE LIST`, with optional
+  `VALID FROM`/`VALID TO`. No per-customer prices: a customer's own deal is
+  their basket-wide `Discount (%)`, and discounts on stock go on single lots.
+  (`CUSTOMER` is a retired column, hidden and ignored.) **Every selling price
   goes through `unitPrice(p, customer, date)` in `js/pricing.js`** (Orders'
-  live total, Reports, the Xero export): customer row → price-list row →
+  live total, Reports, the Xero export): price-list row →
   `List price £` → landed cost ÷ (1 − GP at list), per kg or per piece, before
   the customer's Discount (%). A portion is priced as its whole. Pages call
   `registerPricing({ products, groups, prices, discountRules })` after
