@@ -30,16 +30,23 @@
 // subtotal is ex VAT, at unitPrice(), before any discount. It's recalculated
 // on what's actually invoiced, so a cut weighing light can lose it.
 //
-// Pages call registerPricing({ products, groups, prices, discountRules })
-// after loading those tabs (loadPrices() / loadDiscountRules() read them, or
-// [] before Setup has made them).
+// Lot discounts (lotDiscount()): the LotDiscounts tab puts a % off one lot
+// of one product (for cut cheese, the wheel's code and lot). It covers
+// orders delivered from the day it was made until it's ended, and STACKS on
+// top of the order discount: the lot's lines first get the lot %, then the
+// order / customer % (20% then 10% = 28% off; Xero gets that combined %).
+// The order-discount threshold is measured after lot discounts.
+//
+// Pages call registerPricing({ products, groups, prices, discountRules,
+// lotDiscounts }) after loading those tabs (loadPrices() / loadDiscountRules()
+// / loadLotDiscounts() read them, or [] before Setup has made them).
 
 const PRICE_LISTS = ['Standard', 'P2P', 'Selfridges'];
 const DEFAULT_PRICE_LIST = 'Standard';
 
-let priceBook = { byCode: {}, groupById: {}, rulesByGroup: {}, discountRules: [] };
+let priceBook = { byCode: {}, groupById: {}, rulesByGroup: {}, discountRules: [], lotDiscounts: {}, discountedCodes: new Set() };
 
-function registerPricing({ products = [], groups = [], prices = [], discountRules = [] }) {
+function registerPricing({ products = [], groups = [], prices = [], discountRules = [], lotDiscounts = [] }) {
   const byCode = {}, groupById = {}, rulesByGroup = {};
   products.forEach(p => { if (p['Product code']) byCode[p['Product code']] = p; });
   groups.forEach(g => { if (g.ID) groupById[g.ID] = g; });
@@ -64,7 +71,21 @@ function registerPricing({ products = [], groups = [], prices = [], discountRule
     from: priceDate(r['VALID FROM']),
     to: priceDate(r['VALID TO'])
   })).filter(r => r.threshold > 0 && r.pct > 0);
-  priceBook = { byCode, groupById, rulesByGroup, discountRules: rules };
+  const lots = {};
+  lotDiscounts.forEach(r => {
+    const pct = parseFloat(r['DISCOUNT %']) || 0;
+    const code = (r['PRODUCT CODE'] || '').toString().trim(), lot = (r['BATCH/LOT NUMBER'] || '').toString().trim();
+    if (!code || !lot || !(pct > 0)) return;
+    (lots[lotDiscountKey(code, lot)] = lots[lotDiscountKey(code, lot)] || []).push({
+      id: r.ID || '', pct, reason: r.REASON || '',
+      // Stamps go in as "YYYY-MM-DD HH:MM" but Sheets may show them as
+      // "26/11/2026 11:20:00": priceDate() reads either day.
+      from: priceDate((r['CREATED AT'] || '').toString().trim().split(/[ T]/)[0]),
+      to: priceDate((r['ENDED AT'] || '').toString().trim().split(/[ T]/)[0])
+    });
+  });
+  const discountedCodes = new Set(lotDiscounts.map(r => (r['PRODUCT CODE'] || '').toString().trim()).filter(Boolean));
+  priceBook = { byCode, groupById, rulesByGroup, discountRules: rules, lotDiscounts: lots, discountedCodes };
 }
 
 // The Prices tab as header-keyed objects, or [] if Setup hasn't made it yet.
@@ -75,6 +96,19 @@ async function loadPrices(spreadsheetId) {
   } catch (err) {
     return [];
   }
+}
+
+// The LotDiscounts tab as [{ rowNumber, obj }], or [] before Setup made it.
+async function loadLotDiscountRows(spreadsheetId) {
+  try {
+    const [head = [], ...rows] = await sheetsGet(spreadsheetId, 'LotDiscounts!A:Z');
+    return rows.map((r, i) => ({ rowNumber: i + 2, obj: Object.fromEntries(head.map((h, c) => [h, r[c] ?? ''])) }));
+  } catch (err) {
+    return [];
+  }
+}
+async function loadLotDiscounts(spreadsheetId) {
+  return (await loadLotDiscountRows(spreadsheetId)).map(r => r.obj);
 }
 
 async function loadDiscountRules(spreadsheetId) {
@@ -174,4 +208,31 @@ function orderDiscount(customer, date, subtotal) {
   const ahead = live.filter(r => r.threshold > subtotal + 0.005 && r.pct > pct).sort((a, b) => a.threshold - b.threshold)[0];
   const next = ahead ? { threshold: ahead.threshold, pct: ahead.pct, gap: ahead.threshold - subtotal } : null;
   return { pct, source, customerPct, rule: source === 'order' ? reached : null, next };
+}
+
+const lotDiscountKey = (code, lot) => `${code}\u0001${(lot || '').toString().trim().toUpperCase()}`;
+
+// The discount on this lot for an order delivered on `date` (ISO; blank =
+// today): { pct, reason, id } or null. Made on or before that day and not
+// ended by it. `code` is the stock code — for a cut portion, its wheel's.
+function lotDiscount(code, lot, date) {
+  if (!code || !lot) return null;
+  const day = priceDate(date) || new Date().toISOString().slice(0, 10);
+  const live = (priceBook.lotDiscounts[lotDiscountKey(code, lot)] || [])
+    .filter(r => (!r.from || r.from <= day) && (!r.to || day < r.to))
+    .sort((a, b) => b.from.localeCompare(a.from))[0];
+  return live ? { pct: live.pct, reason: live.reason, id: live.id } : null;
+}
+
+// Whether any lot of this stock code has ever had a discount — a cheap
+// check before working out which lots are free.
+const hasLotDiscounts = code => priceBook.discountedCodes.has(code);
+
+// One Xero-style discount from a lot % then an order %: 20 then 10 → 28.
+function stackDiscounts(lotPct, orderPct) {
+  return Math.round((1 - (1 - (lotPct || 0) / 100) * (1 - (orderPct || 0) / 100)) * 10000) / 100;
+}
+
+function lotOffTag(d) {
+  return d ? `<span class="lot-off" title="${escapeHtml(['Lot discount', d.reason].filter(Boolean).join(' · '))}">−${d.pct}%</span>` : '';
 }

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=54">
+<link rel="stylesheet" href="css/style.css?v=55">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -45,7 +45,7 @@
     <div class="panel"><div class="scroll" style="overflow-x:auto;">
       <table id="batchTable"><thead><tr>
         <th>Product</th><th>Batch / lot</th><th>Supplier</th><th>Received</th><th>Best before</th>
-        <th class="num">Received qty</th><th class="num">Allocated</th><th class="num">Remaining</th>
+        <th class="num">Received qty</th><th class="num">Allocated</th><th class="num">Remaining</th><th>Offer</th>
       </tr></thead><tbody></tbody></table>
     </div></div>
 
@@ -57,18 +57,24 @@
   <form id="adjustForm"></form>
 </dialog>
 
+<dialog id="lotDiscDialog">
+  <form id="lotDiscForm"></form>
+</dialog>
+
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
 <script src="js/shell.js?v=15"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
 <script src="js/lot-holds.js?v=1"></script>
+<script src="js/pricing.js?v=8"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script>
   let token = null;
   let products = [];        // cached from the last loadStock(), for the Adjust stock dialog's product picker
   let lastBatchList = [];   // cached from the last loadStock(), for the Adjust stock dialog's "remove from" batch picker
+  let lotDiscRows = [];     // the LotDiscounts tab with row numbers, to end one
   let dirtyCheck = null;    // set while the Adjust stock dialog is open; attachDiscardGuard calls it via a stable wrapper
 
   const dialogEl = document.getElementById('adjustDialog');
@@ -147,12 +153,14 @@
         sheetsGet(cfg.spreadsheetId, 'Products!A:AZ', token),
         sheetsGet(cfg.spreadsheetId, 'Deliveries!A:Z', token),
         sheetsGet(cfg.spreadsheetId, 'Allocations!A:Z', token),
-        loadLotHolds(cfg.spreadsheetId)
+        loadLotHolds(cfg.spreadsheetId),
+        loadLotDiscountRows(cfg.spreadsheetId).then(rows => { lotDiscRows = rows; })
       ]);
 
       products = toObjects(productRows);
       registerProducts(products);
       registerProductGroups(await groupsP);
+      registerPricing({ products, lotDiscounts: lotDiscRows.map(r => r.obj) });
       const deliveries = toObjects(deliveryRows);
       const allocations = toObjects(allocationRows);
 
@@ -219,10 +227,12 @@
     const expiringSoon = batchList.filter(b => b.remaining > 0.0001 && daysUntil(b.bbe) !== null && daysUntil(b.bbe) <= 3).length;
     const inStockBatches = batchList.filter(b => b.remaining > 0.0001).length;
     const heldCount = batchList.filter(b => b.remaining > 0.0001 && lotHold(b.code, b.batch)).length;
+    const offerCount = batchList.filter(b => b.remaining > 0.0001 && lotDiscount(b.code, b.batch)).length;
     document.getElementById('statsRow').innerHTML = `
       <div class="stat"><div class="n">${summary.length}</div><div class="l">Products in stock</div></div>
       <div class="stat"><div class="n">${inStockBatches}</div><div class="l">Batches in stock</div></div>
       <div class="stat"><div class="n" style="${expiringSoon ? 'color:var(--crit)' : ''}">${expiringSoon}</div><div class="l">Batches ≤3 days to BBE</div></div>
+      ${offerCount ? `<div class="stat"><div class="n" style="color:var(--ok)">${offerCount}</div><div class="l">Lots on offer</div></div>` : ''}
       ${heldCount ? `<a class="stat" href="recall.html" style="text-decoration:none;"><div class="n" style="color:var(--crit)">${heldCount}</div><div class="l">Lots on hold</div></a>` : ''}
     `;
   }
@@ -248,7 +258,7 @@
   function renderBatches(batchList, productByCode) {
     const tbody = document.querySelector('#batchTable tbody');
     if (!batchList.length) {
-      tbody.innerHTML = `<tr><td colspan="8" class="empty" style="padding:18px;">No deliveries logged yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="empty" style="padding:18px;">No deliveries logged yet.</td></tr>`;
       return;
     }
     tbody.innerHTML = batchList.map(b => {
@@ -265,8 +275,109 @@
         <td class="num">${b.qtyReceived.toFixed(2)}</td>
         <td class="num">${b.qtyAllocated.toFixed(2)}</td>
         <td class="num ${remainingClass}">${b.remaining.toFixed(2)} ${unitLabel(b.unit)}</td>
+        <td style="white-space:nowrap;">${offerCellHtml(b)}</td>
       </tr>`;
     }).join('');
+    tbody.querySelectorAll('[data-disc]').forEach(btn => btn.addEventListener('click', () => {
+      const b = lastBatchList.find(x => `${x.code}|${x.batch}` === btn.dataset.disc);
+      if (b) openLotDiscount(b);
+    }));
+    tbody.querySelectorAll('[data-end-disc]').forEach(btn => btn.addEventListener('click', () => endLotDiscount(btn.dataset.endDisc, btn)));
+  }
+
+  // ---- Lot discounts (the LotDiscounts tab; lotDiscount() in js/pricing.js) ----
+  //
+  // A % off one lot — usually short-dated stock — set here in two clicks. New
+  // Order shows it on that lot (and its "On offer" filter), and the Xero
+  // export bills those lines at the lot % on top of the order discount. It
+  // never touches other lots or later deliveries. "End" stops it for orders
+  // delivered from today; orders already out keep it.
+  function offerCellHtml(b) {
+    if (b.remaining <= 0.0001) return '';
+    const d = lotDiscount(b.code, b.batch);
+    const key = escapeHtml(`${b.code}|${b.batch}`);
+    if (d) return `${lotOffTag(d)}${d.reason ? ` <span class="muted" style="font-size:12px;">${escapeHtml(d.reason)}</span>` : ''} <button type="button" class="btn ghost sm" data-end-disc="${escapeHtml(d.id)}" title="Stop this discount for orders delivered from today">End</button>`;
+    const days = daysUntil(b.bbe);
+    const soon = days !== null && days <= 7;
+    return `<button type="button" class="btn ghost sm${soon ? ' attn' : ''}" data-disc="${key}" title="Put a % off this lot">Discount</button>`;
+  }
+
+  const discDialog = document.getElementById('lotDiscDialog');
+  const discForm = document.getElementById('lotDiscForm');
+  const DISC_REASONS = ['Short-dated', 'Overstock', 'Damaged packaging', 'Other'];
+
+  function openLotDiscount(b) {
+    const prod = products.find(p => p['Product code'] === b.code);
+    const days = daysUntil(b.bbe);
+    discForm.innerHTML = `
+      <div class="dlg-h">
+        <div>
+          <div class="ttl">Discount lot ${escapeHtml(b.batch)}</div>
+          <div class="subtitle">${escapeHtml(prod ? prod['Product name'] : b.code)} · ${b.remaining.toFixed(2)} ${unitLabel(b.unit)} left${b.bbe ? ` · best before ${escapeHtml(b.bbe)}` : ''}</div>
+        </div>
+        <button type="button" class="dlg-close" data-cancel aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="dlg-b">
+        <div class="field">
+          <label for="ld_pct">% off this lot</label>
+          <div class="ld-quick">${[10, 20, 30, 50].map(n => `<button type="button" class="day-chip" data-pct="${n}">${n}%</button>`).join('')}</div>
+          <input type="number" id="ld_pct" min="1" max="100" step="any" placeholder="e.g. 20" style="max-width:140px;">
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label for="ld_reason">Reason</label>
+          <select id="ld_reason">${DISC_REASONS.map(r => `<option${r === (days !== null && days <= 7 ? 'Short-dated' : 'Overstock') ? ' selected' : ''}>${r}</option>`).join('')}</select>
+        </div>
+        <p class="muted" style="font-size:12.5px; margin:12px 0 0;">Only this lot: orders delivered from today that take stock from it get the discount, on top of the customer's or order discount. Other lots and future deliveries keep their normal price.</p>
+        <div id="ld_status" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
+      </div>
+      <div class="dlg-f">
+        <button type="button" class="btn ghost" data-cancel>Cancel</button>
+        <button type="submit" class="btn">Put on offer</button>
+      </div>`;
+    discForm.querySelectorAll('[data-cancel]').forEach(x => x.addEventListener('click', () => discDialog.close()));
+    discForm.querySelectorAll('[data-pct]').forEach(x => x.addEventListener('click', () => {
+      discForm.querySelector('#ld_pct').value = x.dataset.pct;
+      discForm.querySelectorAll('[data-pct]').forEach(y => y.classList.toggle('on', y === x));
+    }));
+    discForm.onsubmit = async e => {
+      e.preventDefault();
+      const status = discForm.querySelector('#ld_status');
+      const pct = parseFloat(discForm.querySelector('#ld_pct').value);
+      if (!(pct > 0 && pct <= 100)) { status.textContent = 'Enter a % between 1 and 100.'; status.style.color = 'var(--crit)'; return; }
+      const cfg = await ensureAuth(msg => { status.textContent = msg; });
+      if (!cfg) return;
+      status.textContent = 'Saving…'; status.style.color = 'var(--steel)';
+      try {
+        const existing = await sheetsGet(cfg.spreadsheetId, 'LotDiscounts!A:A', token);
+        const id = nextId(existing.length ? existing : [['ID']], 'LD');
+        await sheetsAppend(cfg.spreadsheetId, 'LotDiscounts!A:I', [id, b.code, b.batch, pct, discForm.querySelector('#ld_reason').value, localStamp(), currentUserLabel(), '', ''], token);
+        discDialog.close();
+        showToast(`Lot ${b.batch} is ${pct}% off`);
+        loadStock();
+      } catch (err) {
+        status.textContent = /Unable to parse range|not found/i.test(err.message) ? 'Run Setup first — it adds the LotDiscounts tab.' : 'Error: ' + err.message;
+        status.style.color = 'var(--crit)';
+      }
+    };
+    discDialog.showModal();
+  }
+
+  async function endLotDiscount(id, btn) {
+    const row = lotDiscRows.find(r => r.obj.ID === id);
+    if (!row || !confirm(`End the ${row.obj['DISCOUNT %']}% discount on lot ${row.obj['BATCH/LOT NUMBER']}? Orders delivered from today won't get it; ones already out keep it.`)) return;
+    const cfg = await ensureAuth();
+    if (!cfg) return;
+    btn.disabled = true;
+    try {
+      await sheetsUpdateRange(cfg.spreadsheetId, `LotDiscounts!H${row.rowNumber}:I${row.rowNumber}`, [[localStamp(), currentUserLabel()]], token);
+      showToast(`Ended the discount on lot ${row.obj['BATCH/LOT NUMBER']}`);
+      loadStock();
+    } catch (err) {
+      btn.disabled = false;
+      setStatus('Couldn’t end it: ' + err.message, 'error');
+    }
   }
 
   // ---- Adjust stock — the only way stock enters/leaves the system outside

@@ -20,7 +20,10 @@
 //   orderDiscount() — the higher of the customer's Discount (%) and the best
 //   DiscountRules threshold (e.g. £1,000 → 5%) the invoiced subtotal reaches.
 //   It's worked out on what's invoiced (weighed kilos), not what was ordered,
-//   so a warning says when weighing moved the order across a threshold;
+//   so a warning says when weighing moved the order across a threshold.
+//   A line from a discounted lot (lotDiscount()) gets that lot's % stacked
+//   with the order's — 20% then 5% → 24% in the Discount column — and its
+//   description says so; the threshold counts lines after lot discounts;
 // - an InvoiceNumber already in Xero is skipped, so the order ID is used as
 //   the invoice number and exporting the same week twice is harmless;
 //   Reference is the customer's own ref for the order (Orders' CUSTOMER
@@ -152,7 +155,11 @@ function xeroInvoiceFor(order, ctx) {
     }
 
     const price = unitPrice(p, customer, order['DELIVERY DATE']).price;
-    orderedValue += billableQty(p, ordered, l.UNIT) * price;
+    // Each lot's discount, and the line's average after them (for orderedValue).
+    parts.forEach(x => { x.lotDisc = x.lot ? lotDiscount(x.wheel || l['PRODUCT CODE'], x.lot, order['DELIVERY DATE']) : null; });
+    const partQty = parts.reduce((s, x) => s + x.qty, 0);
+    const lotFactor = partQty ? parts.reduce((s, x) => s + x.qty * (1 - (x.lotDisc?.pct || 0) / 100), 0) / partQty : 1;
+    orderedValue += billableQty(p, ordered, l.UNIT) * price * lotFactor;
     const itemCode = invoiceItemCode(p);
     if (!itemCode) warnings.push(`${name}: no Xero item code`);
     if (!price) warnings.push(`${name}: no price — fill it in on the draft in Xero`);
@@ -160,27 +167,28 @@ function xeroInvoiceFor(order, ctx) {
     const replaces = l.REPLACES ? ` (replaces ${ctx.productByCode[l.REPLACES]?.['Product name'] || l.REPLACES})` : '';
     parts.forEach(x => {
       const bbe = x.lot ? xeroDate((ctx.deliveryByKey || {})[`${x.wheel} ${x.lot}`]?.['BEST BEFORE DATE']) : '';
-      const lotText = x.lot ? `Lot ${x.lot}${bbe ? ` (BB ${bbe})` : ''}` : '';
+      const lotText = x.lot ? `Lot ${x.lot}${bbe ? ` (BB ${bbe})` : ''}${x.lotDisc ? ` · ${x.lotDisc.pct}% lot discount` : ''}` : '';
       lines.push({
         itemCode,
         description: [name + replaces, x.note, lotText].filter(Boolean).join(' · '),
         qty: xeroRound(x.qty, 3),
         price: xeroRound(price, 2),
+        lotPct: x.lotDisc?.pct || 0,
         account,
         tax: xeroTaxType(p['VAT rate'])
       });
     });
   });
 
-  const subtotal = lines.reduce((s, x) => s + x.qty * x.price, 0);
+  const subtotal = lines.reduce((s, x) => s + x.qty * x.price * (1 - x.lotPct / 100), 0); // after lot discounts
   const disc = orderDiscount(customer, order['DELIVERY DATE'], subtotal);
-  lines.forEach(x => { x.discount = disc.pct; });
+  lines.forEach(x => { x.discount = stackDiscounts(x.lotPct, disc.pct); });
   const atOrder = orderDiscount(customer, order['DELIVERY DATE'], orderedValue);
   if (lines.length && atOrder.pct !== disc.pct) {
     const money = n => `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     warnings.push(`Ordered ${money(orderedValue)} (${atOrder.pct ? atOrder.pct + '% off' : 'no discount'}) but invoices ${money(subtotal)} after weighing, so it gets ${disc.pct ? disc.pct + '% off' : 'no discount'}`);
   }
-  const total = xeroRound(subtotal * (1 - disc.pct / 100), 2);
+  const total = xeroRound(lines.reduce((s, x) => s + x.qty * x.price * (1 - x.discount / 100), 0), 2);
   return { order, customer, discount: disc, ready: !blockers.length && lines.length > 0, blockers, warnings, lines, total };
 }
 

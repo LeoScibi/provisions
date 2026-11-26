@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=54">
+<link rel="stylesheet" href="css/style.css?v=55">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -211,6 +211,17 @@
       // is comma-separated (blank = every list); VALID FROM / TO may be blank.
       title: 'DiscountRules',
       headers: ['ID','THRESHOLD £','DISCOUNT %','PRICE LISTS','VALID FROM','VALID TO','NOTES']
+    },
+    {
+      // A % off one lot of one product — short-dated or overstocked stock
+      // (lotDiscount() in js/pricing.js; set from Stock's By batch table).
+      // Keyed on product code + lot like LotHolds (for cut cheese, the whole
+      // wheel's code — portions cut from that lot get it too). It covers
+      // orders delivered from the day it was made until ENDED AT; it never
+      // touches other lots or future deliveries of the product. Stacks on top
+      // of the customer's / order discount.
+      title: 'LotDiscounts',
+      headers: ['ID','PRODUCT CODE','BATCH/LOT NUMBER','DISCOUNT %','REASON','CREATED AT','CREATED BY','ENDED AT','ENDED BY']
     },
     {
       // Hauliers that bring goods in to Provisions, with contact details

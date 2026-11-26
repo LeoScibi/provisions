@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=54">
+<link rel="stylesheet" href="css/style.css?v=55">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -66,7 +66,7 @@
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=5"></script>
 <script src="js/product-ui.js?v=5"></script>
-<script src="js/pricing.js?v=4"></script>
+<script src="js/pricing.js?v=8"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
@@ -84,6 +84,7 @@
   let deliveriesData = [];  // [{ rowNumber, obj }] from Deliveries — source of what's in stock, per lot
   let purchaseOrders = [];  // PurchaseOrders — for what's arriving, shown in the product picker
   let poLines = [];         // PurchaseOrderLines
+  let offerOnly = false;    // New Order's "On offer" chip: only products with a discounted lot free
   let stockPos = {};        // computeStockPosition() result, refreshed each time the picker renders
   let productGroups = [];   // ProductGroups — a cut product's display name
   let sheetIds = {};         // tab name -> sheetId, lazily populated (needed to delete an allocation row)
@@ -193,6 +194,7 @@
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
       const pricesP = loadPrices(cfg.spreadsheetId);
       const discountRulesP = loadDiscountRules(cfg.spreadsheetId);
+      const lotDiscountsP = loadLotDiscounts(cfg.spreadsheetId);
       const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
       const holdsP = loadLotHolds(cfg.spreadsheetId); // lots on hold never go into the pool
       const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
@@ -212,7 +214,7 @@
       registerProducts(products);
       productGroups = await groupsP;
       registerProductGroups(productGroups);
-      registerPricing({ products, groups: productGroups, prices: await pricesP, discountRules: await discountRulesP });
+      registerPricing({ products, groups: productGroups, prices: await pricesP, discountRules: await discountRulesP, lotDiscounts: await lotDiscountsP });
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       lineHeaders = lineRows[0] || [];
@@ -519,6 +521,7 @@
           <div class="no-search">
             <label for="ord_productSearch">Add products</label>
             <input type="search" id="ord_productSearch" placeholder="Search by name or code…">
+            <div class="no-filters"><button type="button" class="day-chip offer-chip${offerOnly ? ' on' : ''}" id="ord_offerChip" aria-pressed="${offerOnly}" title="Only products with a discounted lot in stock">On offer</button></div>
             <div id="ord_productPicker" class="no-picker"></div>
           </div>
         </div>
@@ -551,6 +554,12 @@
     customerSel.addEventListener('change', renderOrderTotal);
 
     searchInput.addEventListener('input', () => renderProductPicker());
+    form.querySelector('#ord_offerChip').addEventListener('click', e => {
+      offerOnly = !offerOnly;
+      e.currentTarget.classList.toggle('on', offerOnly);
+      e.currentTarget.setAttribute('aria-pressed', offerOnly);
+      renderProductPicker();
+    });
 
     form.onchange = null;
     form.oninput = null;
@@ -715,8 +724,9 @@
     }
     const term = searchNorm((form.querySelector('#ord_productSearch').value || '').trim());
     if (term) items = items.filter(it => searchMatch(it.name, term) || it.codes.some(c => searchMatch(c, term)));
+    if (offerOnly) items = items.filter(it => offerPct(itemStockCode(it)) > 0);
     if (!items.length) {
-      mount.innerHTML = `<div class="empty" style="padding:12px 0;">No products match "${escapeHtml(term)}".</div>`;
+      mount.innerHTML = `<div class="empty" style="padding:12px 0;">${offerOnly ? `Nothing on offer${term ? ` matches "${escapeHtml(term)}"` : ''} — discount a lot from Stock's By batch table.` : `No products match "${escapeHtml(term)}".`}</div>`;
       renderOrderSummary();
       return;
     }
@@ -865,20 +875,32 @@
     if (!p) return 0;
     return billableQty(p, l.qty, l.unit) * unitPrice(p, customer, date).price;
   }
+  // A draft line at its price less any lot discounts, by the share of its
+  // stock each discounted lot covers (picks are in stock units, like need).
+  function draftValue(l, customer, date) {
+    const base = expandDraftLines([l]).reduce((s, x) => s + lineValue(x, customer, date), 0);
+    const need = draftNeed(l);
+    if (!base || !need) return base;
+    const off = (l.picks || []).reduce((s, x) => s + (x.poLineId ? 0 : x.qty * (lotDiscount(x.code, x.batch, date)?.pct || 0) / 100), 0);
+    return base * (1 - Math.min(off, need) / need);
+  }
   function renderOrderTotal() {
     const totalEl = form.querySelector('#ord_total');
     if (!totalEl) return;
     const c = draftCustomer();
     const date = form.querySelector('#ord_deliveryDate')?.value || '';
     const lines = expandDraftLines();
-    const values = lines.map(l => lineValue(l, c, date));
-    const subtotal = values.reduce((s, v) => s + v, 0);
+    const values = draftLines.map(l => draftValue(l, c, date));
+    const listValue = lines.reduce((s, l) => s + lineValue(l, c, date), 0);
+    const subtotal = values.reduce((s, v) => s + v, 0); // after lot discounts, as the threshold counts it
+    const lotSaving = listValue - subtotal;
     const disc = orderDiscount(c, date, subtotal);
     const total = subtotal * (1 - disc.pct / 100);
-    const unpriced = values.filter(v => !v).length;
+    const unpriced = lines.filter(l => !lineValue(l, c, date)).length;
     const list = c ? customerPriceList(c) : '';
     totalEl.textContent = gbp(total);
     form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', list && list !== DEFAULT_PRICE_LIST ? `${list} prices` : '',
+      lotSaving > 0.005 ? `${gbp(lotSaving)} off discounted lots` : '',
       disc.source === 'customer' ? `after ${disc.pct}% customer discount` : disc.source === 'order' ? `after ${disc.pct}% order discount` : '',
       unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
 
@@ -947,6 +969,17 @@
     renderOrderSummary();
   }
 
+  // The stock a picker item draws from (a cut family's wheel), and the best
+  // lot discount on it still free for this delivery date.
+  const itemStockCode = it => it.kind === 'family' ? it.f.rootCode : stockSource(it.p['Product code']).code;
+  function offerPct(stockCode) {
+    if (!hasLotDiscounts(stockCode)) return 0;
+    const date = form.querySelector('#ord_deliveryDate')?.value || '';
+    return computeAvailableBatches(stockCode)
+      .filter(b => !b.bbe || !date || b.bbe >= date)
+      .reduce((m, b) => Math.max(m, lotDiscount(stockCode, b.batch, date)?.pct || 0), 0);
+  }
+
   function pickCardHtml(it) {
     const fam = it.kind === 'family' ? it.f : null;
     const p = fam ? (fam.root || fam.small.p) : it.p;
@@ -960,7 +993,7 @@
       <div class="pick-card${line ? ' in' : ''}" data-pick-code="${escapeHtml(code)}" data-pick-open="${escapeHtml(code)}">
         ${productThumb(p, 'xs')}
         <div class="pk-t">
-          <div class="pk-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</div>
+          <div class="pk-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}${(() => { const pct = offerPct(itemStockCode(it)); return pct ? ` <span class="lot-off" title="A lot of this is discounted">−${pct}%</span>` : ''; })()}</div>
           <div class="pk-sub">${escapeHtml(pack)}${stock ? ' · ' + stock : ''}</div>
         </div>
         <span class="pick-badge">${line ? escapeHtml(draftBadge(line)) : ''}</span>
@@ -989,7 +1022,7 @@
       const date = form.querySelector('#ord_deliveryDate')?.value;
       const bbe = deliveryBbeFor(x.code, x.batch);
       const d = bbe ? daysUntil(bbe) - (date ? daysUntil(date) : 0) : null;
-      return `<span class="src-item"><span class="src src-shelf">In stock</span>lot ${escapeHtml(x.batch)}${d !== null ? ` · ${d < 0 ? '<span class="neg">past best-before</span>' : `${d}d left at delivery`}` : ''}${amt(x.qty)}</span>`;
+      return `<span class="src-item"><span class="src src-shelf">In stock</span>lot ${escapeHtml(x.batch)} ${lotOffTag(lotDiscount(x.code, x.batch, date))}${d !== null ? ` · ${d < 0 ? '<span class="neg">past best-before</span>' : `${d}d left at delivery`}` : ''}${amt(x.qty)}</span>`;
     });
     if (short > 0.0001) chips.push(`<span class="src-item"><span class="src src-short">Short</span>${escapeHtml(fmtAmount(short, unit, piece))} not covered</span>`);
     return chips.join('');
@@ -1087,7 +1120,7 @@
   // fixed-weight product: both tables then count and take whole pieces, and
   // the inputs are in pieces. `values` prefill the inputs, in stock units,
   // keyed by batch or `po|<PO line ID>`.
-  function lotTablesHtml({ lots, arrivals, unit, piece = 0, date, values = {} }) {
+  function lotTablesHtml({ code, lots, arrivals, unit, piece = 0, date, values = {} }) {
     const pcs = q => Math.floor(roundQty(q / piece) + 1e-6);
     const maxOf = q => piece ? pcs(q) : q;
     const shown = q => q ? (piece ? roundQty(q / piece) : q) : '';
@@ -1099,7 +1132,7 @@
         ${lots.length ? `
           <table class="form"><thead><tr><th>Lot</th><th>Best before</th><th>Days left</th><th class="num">Free</th><th class="num">${takeHead}</th></tr></thead>
           <tbody>${lots.map(b => `<tr>
-            <td class="code">${escapeHtml(b.batch)}</td>
+            <td class="code">${escapeHtml(b.batch)} ${lotOffTag(lotDiscount(code, b.batch, date))}</td>
             <td>${escapeHtml(fmtDateShort(b.bbe)) || '—'}</td>
             <td>${daysLeftHtml(b.bbe, date)}</td>
             <td class="num">${escapeHtml(fmtAmount(b.remaining, b.unit || unit, piece))}</td>
@@ -1215,7 +1248,7 @@
           <div class="lot-manual-b">
             <div class="lot-manual-h"><span class="lot-sub">Only if this customer needs a particular lot or delivery.</span>
               <button type="button" class="btn ghost sm" data-auto>Back to automatic</button></div>
-            ${lotTablesHtml({ lots, arrivals, unit, piece, date })}
+            ${lotTablesHtml({ code: srcCode, lots, arrivals, unit, piece, date })}
           </div>
         </details>
       </div>
@@ -1236,7 +1269,7 @@
       }
       const bbe = deliveryBbeFor(srcCode, x.batch);
       const left = bbe && date ? daysUntil(bbe) - daysUntil(date) : null;
-      return `<div class="plan-row"><span class="src src-shelf">In stock</span><span class="plan-t">Lot ${escapeHtml(x.batch)}${bbe ? ` · best before ${escapeHtml(fmtDateShort(bbe))}` : ''}${left !== null ? `<span class="${left < 0 ? 'neg' : 'lot-sub'}">${left < 0 ? 'Past its best-before by delivery' : `${left} days left at delivery`}</span>` : ''}</span><span class="plan-q">${escapeHtml(fmtAmount(x.qty, unit, piece))}</span></div>`;
+      return `<div class="plan-row"><span class="src src-shelf">In stock</span><span class="plan-t">Lot ${escapeHtml(x.batch)} ${lotOffTag(lotDiscount(srcCode, x.batch, date))}${bbe ? ` · best before ${escapeHtml(fmtDateShort(bbe))}` : ''}${left !== null ? `<span class="${left < 0 ? 'neg' : 'lot-sub'}">${left < 0 ? 'Past its best-before by delivery' : `${left} days left at delivery`}</span>` : ''}</span><span class="plan-q">${escapeHtml(fmtAmount(x.qty, unit, piece))}</span></div>`;
     };
     const refresh = () => {
       const line = currentLine();
@@ -1857,7 +1890,7 @@
             <td class="line-actions">${weighedLots.has(a.obj['BATCH/LOT NUMBER']) ? '<span class="muted" title="Undo the weight on the Cutting page to change this">Weighed</span>' : `<button type="button" class="btn ghost sm" data-remove-alloc="${escapeHtml(a.obj.ID)}">Remove</button>`}</td>
           </tr>`).join('')}</tbody></table>` : ''}
         ${outstanding > 0.0001 ? `<div class="sub-h">Allocate the rest · ${escapeHtml(amt(outstanding))} still needed</div>` : ''}
-        ${lotTablesHtml({ lots, arrivals, unit: l.UNIT, piece, date, values })}
+        ${lotTablesHtml({ code, lots, arrivals, unit: l.UNIT, piece, date, values })}
         <div id="allocStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">

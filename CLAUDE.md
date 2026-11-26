@@ -118,8 +118,8 @@ models, sheet schemas, or conventions between the two.
   live total, Reports, the Xero export): price-list row →
   `List price £` → landed cost ÷ (1 − GP at list), per kg or per piece, before
   the customer's Discount (%). A portion is priced as its whole. Pages call
-  `registerPricing({ products, groups, prices, discountRules })` after
-  `loadPrices()` / `loadDiscountRules()`.
+  `registerPricing({ products, groups, prices, discountRules, lotDiscounts })`
+  after `loadPrices()` / `loadDiscountRules()` / `loadLotDiscounts()`.
 - **DiscountRules** (the "Order discounts" table on `prices.html`) — "spend £X,
   get Y% off the whole order" (e.g. £1,000 → 5%), optionally limited to some
   `PRICE LISTS` (comma-separated) and dates. `orderDiscount(customer, date,
@@ -128,6 +128,18 @@ models, sheet schemas, or conventions between the two.
   next rule in reach for New Order's upsell bar. It's always recalculated on
   what's invoiced: the Xero export decides it on the weighed kilos and warns
   when weighing moved an order across a threshold.
+- **LotDiscounts** — a % off one lot (product code + lot, like LotHolds; for
+  cut cheese the wheel's code, so portions cut from it share it). Set and
+  ended from the Offer column of Stock's By batch table. `lotDiscount(code,
+  lot, date)` in `js/pricing.js`: covers orders delivered from the day it was
+  made until `ENDED AT`; never other lots or later deliveries. It **stacks**:
+  lot % first, then the order/customer % (`stackDiscounts()`: 20 then 5 →
+  24, the one Discount % Xero gets on that lot's invoice line). The
+  order-discount threshold counts lines after lot discounts. New Order shows
+  "−20%" on lots, chips and product cards (`lotOffTag()`), an **On offer**
+  chip filters the product search to products with a discounted lot free for
+  the delivery date (`offerPct()`), and the total values each draft line by
+  the share of its picks on discounted lots (`draftValue()`).
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
   delivery date range. Status: Ordered → Delivered/Cancelled — delivery is
@@ -292,7 +304,7 @@ suppliers.html            Supplier list
 customers.html              Customer list
 transport.html               Hauliers bringing goods in, with contacts
 purchase-orders.html           Place/receive supplier orders
-stock.html                       Stock view
+stock.html                       Stock view; put a lot on offer (Offer column)
 stock-take.html                    Physical count vs. system quantity
 receiving.html                       Check a delivery in, line by line (phone-first)
 orders.html                          Pipeline board (a column per status, one delivery
