@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=52">
+<link rel="stylesheet" href="css/style.css?v=54">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -62,11 +62,11 @@
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=14"></script>
+<script src="js/shell.js?v=15"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/stock-calc.js?v=5"></script>
 <script src="js/product-ui.js?v=5"></script>
-<script src="js/pricing.js?v=1"></script>
+<script src="js/pricing.js?v=2"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
 <script src="js/dialog-guard.js?v=1"></script>
@@ -192,6 +192,7 @@
     try {
       const groupsP = loadProductGroups(cfg.spreadsheetId); // in parallel with the reads below
       const pricesP = loadPrices(cfg.spreadsheetId);
+      const discountRulesP = loadDiscountRules(cfg.spreadsheetId);
       const cutsP = loadOptionalTab(cfg.spreadsheetId, 'Cuts');
       const holdsP = loadLotHolds(cfg.spreadsheetId); // lots on hold never go into the pool
       const [customerRows, productRows, orderRows, lineRows, allocRows, deliveryRows, poRows, polRows] = await Promise.all([
@@ -211,7 +212,7 @@
       registerProducts(products);
       productGroups = await groupsP;
       registerProductGroups(productGroups);
-      registerPricing({ products, groups: productGroups, prices: await pricesP });
+      registerPricing({ products, groups: productGroups, prices: await pricesP, discountRules: await discountRulesP });
       ordersData = toRowObjects(orderRows);
       orderLinesData = toRowObjects(lineRows);
       lineHeaders = lineRows[0] || [];
@@ -524,7 +525,7 @@
         <div id="orderDlgStatus" class="mono" style="margin-top:10px; font-size:12.5px; color:var(--steel);"></div>
       </div>
       <div class="dlg-f">
-        <div class="order-total" aria-live="polite"><span class="ot-l" id="ord_totalLabel">Order total</span><span class="ot-v" id="ord_total">£0.00</span></div>
+        <div class="order-total" aria-live="polite"><span class="ot-l" id="ord_totalLabel">Order total</span><span class="ot-v" id="ord_total">£0.00</span><div class="order-disc" id="ord_discBar" hidden></div></div>
         <button type="button" class="btn ghost" ${o ? 'data-back' : 'data-cancel'}>Cancel</button>
         <button type="submit" class="btn" id="orderSubmitBtn">${o ? 'Save changes' : 'Place order'}</button>
       </div>
@@ -849,7 +850,13 @@
   // Each line at the customer's price for the delivery date (unitPrice() in
   // js/pricing.js: their own Prices row, their price list's, else List price
   // £ or the calculated list price — the same figure Reports and the Xero
-  // export use), less the customer's Discount (%).
+  // export use), less the order's discount: the higher of the customer's
+  // Discount (%) and the best DiscountRules threshold the subtotal reaches
+  // (orderDiscount()). A bar under the total fills towards the next threshold
+  // to help upsell. Cut cheese counts at nominal weight here; the invoice
+  // re-checks the threshold on the weighed kilos.
+  const gbp = n => `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const gbpShort = n => `£${n.toLocaleString('en-GB', { maximumFractionDigits: n < 100 ? 2 : 0 })}`;
   function draftCustomer() {
     return customers.find(x => x['Customer name (as in Xero)'] === form.querySelector('#ord_customer')?.value);
   }
@@ -863,13 +870,34 @@
     if (!totalEl) return;
     const c = draftCustomer();
     const date = form.querySelector('#ord_deliveryDate')?.value || '';
-    const values = expandDraftLines().map(l => lineValue(l, c, date));
-    const discount = parseFloat(c?.['Discount (%)']) || 0;
-    const total = values.reduce((s, v) => s + v, 0) * (1 - discount / 100);
+    const lines = expandDraftLines();
+    const values = lines.map(l => lineValue(l, c, date));
+    const subtotal = values.reduce((s, v) => s + v, 0);
+    const disc = orderDiscount(c, date, subtotal);
+    const total = subtotal * (1 - disc.pct / 100);
     const unpriced = values.filter(v => !v).length;
     const list = c ? customerPriceList(c) : '';
-    totalEl.textContent = `£${total.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', list && list !== DEFAULT_PRICE_LIST ? `${list} prices` : '', discount ? `after ${discount}% discount` : '', unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
+    totalEl.textContent = gbp(total);
+    form.querySelector('#ord_totalLabel').textContent = ['Order total ex VAT', list && list !== DEFAULT_PRICE_LIST ? `${list} prices` : '',
+      disc.source === 'customer' ? `after ${disc.pct}% customer discount` : disc.source === 'order' ? `after ${disc.pct}% order discount` : '',
+      unpriced ? `${unpriced} item(s) with no price` : ''].filter(Boolean).join(' · ');
+
+    // The upsell bar: only while a threshold beats what they'd get anyway.
+    const bar = form.querySelector('#ord_discBar');
+    const weighed = lines.some(l => { const p = productOf(l.code); return p && p['Pricing basis'] === 'Per kg' && l.unit !== 'kg'; });
+    const est = weighed ? ' <span class="od-est" title="Cut cheese is billed on its weighed kilos, so the invoice re-checks this">est.</span>' : '';
+    if (c && subtotal > 0 && disc.next) {
+      const fill = Math.min(100, subtotal / disc.next.threshold * 100);
+      bar.innerHTML = `<div class="od-track"><div class="od-fill" style="width:${fill.toFixed(1)}%"></div></div>
+        <div class="od-t"><strong>${gbpShort(disc.next.gap)} more</strong> for ${disc.next.pct}% off the whole order${est}</div>`;
+      bar.hidden = false;
+    } else if (c && disc.source === 'order') {
+      bar.innerHTML = `<div class="od-track"><div class="od-fill done" style="width:100%"></div></div>
+        <div class="od-t"><strong>${disc.pct}% order discount</strong> — saves ${gbp(subtotal - total)}${est}</div>`;
+      bar.hidden = false;
+    } else {
+      bar.hidden = true;
+    }
   }
 
   // ---- New Order: compact search cards (right) and the order list (left) ----

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=52">
+<link rel="stylesheet" href="css/style.css?v=54">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -31,14 +31,21 @@
 
   <div id="groupNote"></div>
   <div id="pricesMount"></div>
+
+  <h2 style="margin-top:34px;">Order discounts</h2>
+  <p class="subtitle" style="margin:-4px 0 14px; color:var(--steel); font-size:13.5px;">
+    "Spend £X, get Y% off the whole order", on the order's ex-VAT total. A customer gets the higher of this and their own Discount (%), never both.
+    New Order shows a bar filling towards the next one; the Xero export re-checks it on the weighed kilos.
+  </p>
+  <div id="discountsMount"></div>
 </main>
 
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=14"></script>
+<script src="js/shell.js?v=15"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
-<script src="js/pricing.js?v=1"></script>
+<script src="js/pricing.js?v=2"></script>
 <script src="js/dialog-guard.js?v=1"></script>
 <script src="js/searchable-select.js?v=2"></script>
 <script src="js/crud-page.js?v=22"></script>
@@ -89,6 +96,23 @@
           </div>`;
         document.getElementById('addForGroup').onclick = () => table.then(t => t.openAdd({ 'GROUP ID': focus }));
       }
+    });
+
+    initCrudTable({
+      mount: '#discountsMount',
+      title: 'Order discounts',
+      subtitle: 'An order over the threshold gets this much off every line.',
+      tab: 'DiscountRules',
+      headers: ['ID','THRESHOLD £','DISCOUNT %','PRICE LISTS','VALID FROM','VALID TO','NOTES'],
+      autoId: 'DR',
+      fields: [
+        { key: 'THRESHOLD £', label: 'Order over £ (ex VAT)', type: 'number', format: 'currency', required: true, primary: true },
+        { key: 'DISCOUNT %', label: 'Discount %', type: 'number', required: true },
+        { key: 'PRICE LISTS', label: `Price lists (comma-separated, blank = all: ${PRICE_LISTS.join(', ')})`, type: 'text', placeholder: 'e.g. Standard, Selfridges' },
+        { key: 'VALID FROM', label: 'Valid from', type: 'date' },
+        { key: 'VALID TO', label: 'Valid to', type: 'date' },
+        { key: 'NOTES', label: 'Notes', type: 'textarea' }
+      ]
     });
 
     if (focus) {

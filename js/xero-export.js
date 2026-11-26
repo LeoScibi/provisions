@@ -16,7 +16,11 @@
 //   js/pricing.js: the product's ProductGroups code, else the whole's own);
 // - UnitAmount is the customer's price for the delivery date (unitPrice() in
 //   js/pricing.js — their price list, a customer price, else List price £),
-//   with their Discount (%) in the Discount column;
+//   and the order's discount in the Discount column on every line:
+//   orderDiscount() — the higher of the customer's Discount (%) and the best
+//   DiscountRules threshold (e.g. £1,000 → 5%) the invoiced subtotal reaches.
+//   It's worked out on what's invoiced (weighed kilos), not what was ordered,
+//   so a warning says when weighing moved the order across a threshold;
 // - an InvoiceNumber already in Xero is skipped, so the order ID is used as
 //   the invoice number and exporting the same week twice is harmless;
 //   Reference is the customer's own ref for the order (Orders' CUSTOMER
@@ -90,7 +94,7 @@ function xeroInvoiceFor(order, ctx) {
   const blockers = [], warnings = [], lines = [];
   const orderLines = ctx.lines.filter(l => l['ORDER ID'] === order.ID);
   const customer = ctx.customerByName[order.CUSTOMER];
-  const discount = xeroNum(customer?.['Discount (%)']);
+  let orderedValue = 0; // at ordered (nominal) quantities, to spot a threshold lost or gained at weighing
   const account = customer?.['Price list'] === XERO_SHOP_PRICE_LIST ? XERO_ACCOUNT_SHOPS : XERO_ACCOUNT_WHOLESALE;
 
   if (!orderLines.length) blockers.push('No lines');
@@ -148,6 +152,7 @@ function xeroInvoiceFor(order, ctx) {
     }
 
     const price = unitPrice(p, customer, order['DELIVERY DATE']).price;
+    orderedValue += billableQty(p, ordered, l.UNIT) * price;
     const itemCode = invoiceItemCode(p);
     if (!itemCode) warnings.push(`${name}: no Xero item code`);
     if (!price) warnings.push(`${name}: no price — fill it in on the draft in Xero`);
@@ -161,15 +166,22 @@ function xeroInvoiceFor(order, ctx) {
         description: [name + replaces, x.note, lotText].filter(Boolean).join(' · '),
         qty: xeroRound(x.qty, 3),
         price: xeroRound(price, 2),
-        discount,
         account,
         tax: xeroTaxType(p['VAT rate'])
       });
     });
   });
 
-  const total = xeroRound(lines.reduce((s, x) => s + x.qty * x.price, 0) * (1 - discount / 100), 2);
-  return { order, customer, ready: !blockers.length && lines.length > 0, blockers, warnings, lines, total };
+  const subtotal = lines.reduce((s, x) => s + x.qty * x.price, 0);
+  const disc = orderDiscount(customer, order['DELIVERY DATE'], subtotal);
+  lines.forEach(x => { x.discount = disc.pct; });
+  const atOrder = orderDiscount(customer, order['DELIVERY DATE'], orderedValue);
+  if (lines.length && atOrder.pct !== disc.pct) {
+    const money = n => `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    warnings.push(`Ordered ${money(orderedValue)} (${atOrder.pct ? atOrder.pct + '% off' : 'no discount'}) but invoices ${money(subtotal)} after weighing, so it gets ${disc.pct ? disc.pct + '% off' : 'no discount'}`);
+  }
+  const total = xeroRound(subtotal * (1 - disc.pct / 100), 2);
+  return { order, customer, discount: disc, ready: !blockers.length && lines.length > 0, blockers, warnings, lines, total };
 }
 
 // The CSV rows (header first) for invoices from xeroInvoiceFor().

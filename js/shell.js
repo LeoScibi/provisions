@@ -38,7 +38,7 @@
     { label: 'Stock', pages: [
       ['stock.html', 'Stock', '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>'],
       ['products.html', 'Products', '<path d="M3 7.5l9-4 9 4-9 4-9-4z"/><path d="M3 7.5v9l9 4 9-4v-9"/><path d="M12 11.5v9"/>'],
-      ['prices.html', 'Prices', '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8.5" cy="8.5" r="1.6"/>'],
+      ['prices.html', 'Prices & discounts', '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8.5" cy="8.5" r="1.6"/>'],
       ['stock-take.html', 'Stock takes', '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1z"/><path d="M8.5 12.5l2 2 4-4.5"/>'],
       ['recall.html', 'Recalls', '<path d="M12 3l9 16H3z"/><path d="M12 10v4"/><path d="M12 17h.01"/>'],
       ['trace.html', 'Lot trace', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>', 'hidden']

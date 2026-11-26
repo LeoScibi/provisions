@@ -116,7 +116,16 @@ models, sheet schemas, or conventions between the two.
   live total, Reports, the Xero export): customer row → price-list row →
   `List price £` → landed cost ÷ (1 − GP at list), per kg or per piece, before
   the customer's Discount (%). A portion is priced as its whole. Pages call
-  `registerPricing({ products, groups, prices })` after `loadPrices()`.
+  `registerPricing({ products, groups, prices, discountRules })` after
+  `loadPrices()` / `loadDiscountRules()`.
+- **DiscountRules** (the "Order discounts" table on `prices.html`) — "spend £X,
+  get Y% off the whole order" (e.g. £1,000 → 5%), optionally limited to some
+  `PRICE LISTS` (comma-separated) and dates. `orderDiscount(customer, date,
+  subtotal)` gives the **higher** of the customer's Discount (%) and the best
+  rule the ex-VAT subtotal (at `unitPrice()`) reaches — never both — plus the
+  next rule in reach for New Order's upsell bar. It's always recalculated on
+  what's invoiced: the Xero export decides it on the weighed kilos and warns
+  when weighing moved an order across a threshold.
 - **PurchaseOrders** / **PurchaseOrderLines** — an order placed with one
   supplier (lines restricted to that supplier's products), with an expected
   delivery date range. Status: Ordered → Delivered/Cancelled — delivery is
@@ -179,7 +188,8 @@ models, sheet schemas, or conventions between the two.
   (Customers' Delivery day, else Wed out of London / Thu London), and picking
   another day adds "Requested delivery: …" to the notes. Its button row shows a
   live total ex VAT (`renderOrderTotal()`): each line at `unitPrice()` for the
-  customer and delivery date, less the customer's Discount (%). A product's **+** (in search, or −/+ on its order line)
+  customer and delivery date, less `orderDiscount()`, with a bar filling
+  towards the next order-discount threshold ("£181 more for 5% off"). A product's **+** (in search, or −/+ on its order line)
   changes the quantity by one piece/case without a pop-up (`bumpDraft()`); each
   line shows where its stock comes from as chips — green *In stock* (a lot),
   blue *Arriving* (a PO reservation), red *Short*. Clicking a product or line
@@ -243,7 +253,7 @@ models, sheet schemas, or conventions between the two.
 - **Xero export** (`js/xero-export.js`, the "Export to Xero" button on
   `lists.html`, the Packing page): the week's orders, by delivery date, as a Xero sales-invoice
   import CSV — Xero's template headers exactly, one row per line, DD/MM/YYYY,
-  ex-VAT `UnitAmount`, customer `Discount (%)` per line, VAT rate mapped to
+  ex-VAT `UnitAmount`, the order's `orderDiscount()` % on every line, VAT rate mapped to
   Xero's tax-rate names (`xeroTaxType()`). Account code is by customer:
   20003 for the shops (Customers' Price list "P2P"), 20002 for wholesale
   and Selfridges; every line is tracked Department: Food. An order is only exportable once
@@ -275,7 +285,7 @@ index.html          Today: sign-in, then the next delivery run step by step
                     on a phone
 setup.html            Auto-creates required tabs + headers — run first on a new sheet
 products.html           Products (one card each: SKUs, Xero code, prices) / SKUs views
-prices.html             Special prices by price list or customer
+prices.html             Special prices by price list or customer; order discounts
 suppliers.html            Supplier list
 customers.html              Customer list
 transport.html               Hauliers bringing goods in, with contacts

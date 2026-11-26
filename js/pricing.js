@@ -22,15 +22,23 @@
 // Prices rows are by product (ProductGroups ID), so one row prices a wheel and
 // every portion cut from it.
 //
-// Pages call registerPricing({ products, groups, prices }) after loading
-// those tabs (loadPrices() reads Prices, or [] before Setup has made it).
+// Order discounts (orderDiscount()): the DiscountRules tab holds "spend
+// £X, get Y% off" rules (e.g. £1,000 → 5%), each optionally limited to some
+// price lists and dates. An order's discount is the HIGHER of the customer's
+// own Discount (%) and the best rule its subtotal reaches — never both. The
+// subtotal is ex VAT, at unitPrice(), before any discount. It's recalculated
+// on what's actually invoiced, so a cut weighing light can lose it.
+//
+// Pages call registerPricing({ products, groups, prices, discountRules })
+// after loading those tabs (loadPrices() / loadDiscountRules() read them, or
+// [] before Setup has made them).
 
 const PRICE_LISTS = ['Standard', 'P2P', 'Selfridges'];
 const DEFAULT_PRICE_LIST = 'Standard';
 
-let priceBook = { byCode: {}, groupById: {}, rulesByGroup: {} };
+let priceBook = { byCode: {}, groupById: {}, rulesByGroup: {}, discountRules: [] };
 
-function registerPricing({ products = [], groups = [], prices = [] }) {
+function registerPricing({ products = [], groups = [], prices = [], discountRules = [] }) {
   const byCode = {}, groupById = {}, rulesByGroup = {};
   products.forEach(p => { if (p['Product code']) byCode[p['Product code']] = p; });
   groups.forEach(g => { if (g.ID) groupById[g.ID] = g; });
@@ -47,13 +55,30 @@ function registerPricing({ products = [], groups = [], prices = [] }) {
       to: priceDate(r['VALID TO'])
     });
   });
-  priceBook = { byCode, groupById, rulesByGroup };
+  const rules = discountRules.map(r => ({
+    id: r.ID || '',
+    threshold: parseFloat(r['THRESHOLD £']) || 0,
+    pct: parseFloat(r['DISCOUNT %']) || 0,
+    lists: (r['PRICE LISTS'] || '').toString().split(',').map(x => x.trim()).filter(Boolean),
+    from: priceDate(r['VALID FROM']),
+    to: priceDate(r['VALID TO'])
+  })).filter(r => r.threshold > 0 && r.pct > 0);
+  priceBook = { byCode, groupById, rulesByGroup, discountRules: rules };
 }
 
 // The Prices tab as header-keyed objects, or [] if Setup hasn't made it yet.
 async function loadPrices(spreadsheetId) {
   try {
     const [head = [], ...rows] = await sheetsGet(spreadsheetId, 'Prices!A:Z');
+    return rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
+  } catch (err) {
+    return [];
+  }
+}
+
+async function loadDiscountRules(spreadsheetId) {
+  try {
+    const [head = [], ...rows] = await sheetsGet(spreadsheetId, 'DiscountRules!A:Z');
     return rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])));
   } catch (err) {
     return [];
@@ -131,4 +156,24 @@ function billableQty(p, qty, unit) {
   if (!p) return 0;
   if (p['Pricing basis'] === 'Per kg' && unit !== 'kg') return qty * (parseFloat(p['Nominal weight (kg)']) || 0);
   return qty;
+}
+
+// The discount an order gets: { pct, source, customerPct, rule, next }.
+// `subtotal` is ex VAT at unitPrice(), before discounts; `date` the delivery
+// date. source is 'customer' | 'order' | '' (none). `next` is the nearest rule
+// still out of reach that would raise the discount — { threshold, pct, gap }
+// — for the "spend £X more" bar; null when there's none.
+function orderDiscount(customer, date, subtotal) {
+  const customerPct = parseFloat(customer?.['Discount (%)']) || 0;
+  const list = customerPriceList(customer);
+  const day = priceDate(date);
+  const live = priceBook.discountRules
+    .filter(r => (!r.lists.length || r.lists.includes(list)) && (!day || !r.from || r.from <= day) && (!day || !r.to || day <= r.to));
+  const reached = live.filter(r => subtotal + 0.005 >= r.threshold).sort((a, b) => b.pct - a.pct)[0] || null;
+  const rulePct = reached ? reached.pct : 0;
+  const pct = Math.max(customerPct, rulePct);
+  const source = !pct ? '' : rulePct > customerPct ? 'order' : 'customer';
+  const ahead = live.filter(r => r.threshold > subtotal + 0.005 && r.pct > pct).sort((a, b) => a.threshold - b.threshold)[0];
+  const next = ahead ? { threshold: ahead.threshold, pct: ahead.pct, gap: ahead.threshold - subtotal } : null;
+  return { pct, source, customerPct, rule: source === 'order' ? reached : null, next };
 }

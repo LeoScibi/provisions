@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=52">
+<link rel="stylesheet" href="css/style.css?v=54">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="img/icon-192.png">
@@ -51,14 +51,14 @@
 </dialog>
 <script src="js/config.js?v=5"></script>
 <script src="js/sheets.js?v=6"></script>
-<script src="js/shell.js?v=14"></script>
+<script src="js/shell.js?v=15"></script>
 <script src="js/util.js?v=3"></script>
 <script src="js/product-ui.js?v=5"></script>
 <script src="js/cuts.js?v=1"></script>
 <script src="js/lot-holds.js?v=1"></script>
-<script src="js/pricing.js?v=1"></script>
-<script src="js/xero-export.js?v=6"></script>
-<script src="js/lists-data.js?v=4"></script>
+<script src="js/pricing.js?v=2"></script>
+<script src="js/xero-export.js?v=7"></script>
+<script src="js/lists-data.js?v=5"></script>
 <script>
   // Packing: one slip per order in the order they're packed (Out of London,
   // then each day's London run in truck order), box counts, delivery notes,
@@ -384,7 +384,7 @@
           ${inv.blockers.map(b => `<div style="color:var(--crit); font-size:12.5px;">${escapeHtml(b)}</div>`).join('')}
           ${inv.ready ? inv.warnings.map(w => `<div class="muted" style="font-size:12.5px;">${escapeHtml(w)}</div>`).join('') : ''}</td>
         <td>${inv.ready ? '<span class="tag t-ok">Ready</span>' : '<span class="tag t-crit">Not ready</span>'}</td>
-        <td class="num">${inv.ready ? money(inv.total) : ''}</td>
+        <td class="num">${inv.ready ? money(inv.total) : ''}${inv.ready && inv.discount?.pct ? `<br><span class="code" title="${inv.discount.source === 'order' ? 'Order discount (DiscountRules)' : 'Customer discount'}">${inv.discount.pct}% ${inv.discount.source === 'order' ? 'order' : 'cust.'} disc.</span>` : ''}</td>
       </tr>`;
     document.getElementById('xeroForm').innerHTML = `
       <div class="dlg-h">
